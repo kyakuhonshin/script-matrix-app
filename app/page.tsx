@@ -92,44 +92,53 @@ export default function Home() {
     return true
   }
 
-  // シンプルな並列処理 - Map重複排除なし、単純にconcat
-  const processTextInParallel = async (fullText: string): Promise<MatrixData> => {
+  // 直列処理（シーケンシャル）- タイムアウト回避のため
+  const processTextSequentially = async (fullText: string): Promise<MatrixData> => {
     const chunks = splitTextIntoChunks(fullText, CHUNK_SIZE)
     const totalChunks = chunks.length
     
     setProgress({ current: 0, total: totalChunks })
     
-    // 並列で全チャンクを処理
-    const promises = chunks.map(async (chunk, index) => {
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          text: chunk, 
-          password
-        }),
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`セクション ${index + 1} の処理に失敗: ${errorText}`)
-      }
-
-      const data = await response.json()
+    const allScenes: any[] = []
+    
+    // 直列処理：1つずつ順番に処理
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]
       
-      if (!data.is_script) {
-        throw new Error(data.error_message || '台本形式ではありません')
-      }
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            text: chunk, 
+            password
+          }),
+        })
 
-      setProgress(prev => ({ ...prev, current: prev.current + 1 }))
-      return data.scenes || []
-    })
-    
-    // 全結果を待つ
-    const allScenesArrays = await Promise.all(promises)
-    
-    // 単純にconcat（重複排除なし、順序保持）
-    const allScenes = allScenesArrays.flat()
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`セクション ${i + 1} の処理に失敗: ${errorText}`)
+        }
+
+        const data = await response.json()
+        
+        if (!data.is_script) {
+          throw new Error(data.error_message || '台本形式ではありません')
+        }
+
+        // シーンを追加
+        if (data.scenes && Array.isArray(data.scenes)) {
+          allScenes.push(...data.scenes)
+        }
+        
+        // 進捗更新
+        setProgress({ current: i + 1, total: totalChunks })
+        
+      } catch (err: any) {
+        console.error(`Chunk ${i + 1} failed:`, err)
+        // エラーが出ても続行（部分的な結果を返す）
+      }
+    }
     
     // すべてのシーンからユニークな登場人物を収集
     const allCharacters = new Set<string>()
@@ -254,13 +263,20 @@ export default function Home() {
         return
       }
       
-      // 長いテキストは並列処理
-      const result = await processTextInParallel(scriptText)
+      // 長いテキストは直列処理（タイムアウト回避）
+      const result = await processTextSequentially(scriptText)
       setMatrixData(result)
       
     } catch (err: any) {
       console.error('Processing error:', err)
-      setError(err.message || '予期しないエラーが発生しました')
+      const errorMsg = err.message || '予期しないエラーが発生しました'
+      setError(errorMsg)
+      
+      // タイムアウトエラーの場合はアドバイスを表示
+      if (errorMsg.includes('TIMEOUT') || errorMsg.includes('FUNCTION_INVOCATION_TIMEOUT') || 
+          errorMsg.includes('504') || errorMsg.includes('60秒')) {
+        setError(errorMsg + '\n\nデータ量が多いため処理がタイムアウトしました。PDFを話数ごとに分割してアップロードすると解決する可能性があります。')
+      }
     } finally {
       setIsProcessing(false)
     }
@@ -503,6 +519,11 @@ export default function Home() {
               {error && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
                   <p className="text-red-700 font-medium">⚠ {error}</p>
+                  {(error.includes('TIMEOUT') || error.includes('504') || error.includes('60秒')) && (
+                    <p className="mt-2 text-red-600 text-sm">
+                      データ量が多いため処理がタイムアウトしました。PDFを話数ごとに分割してアップロードすると解決する可能性があります。
+                    </p>
+                  )}
                 </div>
               )}
 
