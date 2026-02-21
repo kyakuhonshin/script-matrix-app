@@ -17,13 +17,19 @@ interface MatrixData {
   scenes: SceneData[]
 }
 
-type InputMode = 'pdf' | 'text'
+type InputMode = 'file' | 'text'
+type FileType = 'pdf' | 'docx' | 'txt'
 type LoadingStep = 'idle' | 'uploading' | 'parsing' | 'analyzing' | 'structuring' | 'complete'
 
+const CORRECT_PASSWORD = 'kouban2026'
+
 export default function Home() {
-  const [inputMode, setInputMode] = useState<InputMode>('pdf')
+  const [inputMode, setInputMode] = useState<InputMode>('file')
+  const [fileType, setFileType] = useState<FileType>('pdf')
   const [file, setFile] = useState<File | null>(null)
   const [scriptText, setScriptText] = useState('')
+  const [password, setPassword] = useState('')
+  const [passwordError, setPasswordError] = useState('')
   const [loadingStep, setLoadingStep] = useState<LoadingStep>('idle')
   const [error, setError] = useState<string>('')
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
@@ -34,7 +40,7 @@ export default function Home() {
     const texts: Record<LoadingStep, string> = {
       idle: '',
       uploading: 'ファイルをアップロード中...',
-      parsing: '台本を解析中...',
+      parsing: 'ファイルを解析中...',
       analyzing: 'シーン情報を抽出中...',
       structuring: '香盤表を構築中...',
       complete: '完了',
@@ -42,13 +48,38 @@ export default function Home() {
     return texts[step]
   }
 
+  const getFileAccept = () => {
+    switch (fileType) {
+      case 'pdf': return '.pdf'
+      case 'docx': return '.docx'
+      case 'txt': return '.txt'
+    }
+  }
+
+  const getFileTypeLabel = () => {
+    switch (fileType) {
+      case 'pdf': return 'PDF'
+      case 'docx': return 'Word'
+      case 'txt': return 'テキスト'
+    }
+  }
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
-    if (selectedFile && selectedFile.type === 'application/pdf') {
+    if (!selectedFile) return
+
+    const validTypes: Record<FileType, string> = {
+      pdf: 'application/pdf',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      txt: 'text/plain'
+    }
+
+    if (fileType === 'txt' || selectedFile.type === validTypes[fileType] || 
+        (fileType === 'docx' && selectedFile.name.endsWith('.docx'))) {
       setFile(selectedFile)
       setError('')
     } else {
-      setError('PDFファイルを選択してください')
+      setError(`${getFileTypeLabel()}ファイルを選択してください`)
       setFile(null)
     }
   }
@@ -60,17 +91,31 @@ export default function Home() {
     await sleep(800)
   }
 
+  const validatePassword = () => {
+    if (password !== CORRECT_PASSWORD) {
+      setPasswordError('合言葉が正しくありません')
+      return false
+    }
+    setPasswordError('')
+    return true
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    if (!validatePassword()) {
+      return
+    }
+
     setError('')
     setLoadingStep('uploading')
 
     try {
-      let payload: { pdfData?: string; text?: string }
+      let payload: { pdfData?: string; docxData?: string; text?: string }
 
-      if (inputMode === 'pdf') {
+      if (inputMode === 'file') {
         if (!file) {
-          setError('PDFファイルを選択してください')
+          setError('ファイルを選択してください')
           setLoadingStep('idle')
           return
         }
@@ -81,7 +126,15 @@ export default function Home() {
             ''
           )
         )
-        payload = { pdfData: base64 }
+        
+        if (fileType === 'pdf') {
+          payload = { pdfData: base64 }
+        } else if (fileType === 'docx') {
+          payload = { docxData: base64 }
+        } else {
+          const text = await file.text()
+          payload = { text }
+        }
         await updateLoadingStep('parsing')
       } else {
         if (!scriptText.trim()) {
@@ -111,6 +164,13 @@ export default function Home() {
       }
 
       const data = await response.json()
+
+      if (!data.is_script) {
+        setError(data.error_message || '台本形式ではありません')
+        setLoadingStep('idle')
+        return
+      }
+
       await updateLoadingStep('complete')
       setMatrixData(data)
     } catch (err) {
@@ -228,133 +288,187 @@ export default function Home() {
   const isLoading = loadingStep !== 'idle' && loadingStep !== 'complete'
 
   return (
-    <main className="min-h-screen p-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Ad Space Top */}
-      <div className="max-w-7xl mx-auto mb-8">
-        <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg p-8 text-center">
-          <p className="text-gray-500 text-sm">広告枠（Ad Space）</p>
-          <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
+      <div className="w-full bg-gray-200 border-b border-gray-300">
+        <div className="max-w-5xl mx-auto py-4 px-4 text-center">
+          <div className="bg-gray-300 border-2 border-dashed border-gray-400 rounded-lg py-6">
+            <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
+            <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          台本香盤表ジェネレーター
-        </h1>
-        <p className="text-gray-600 mb-8">
-          PDFまたはテキストの台本から香盤表を自動生成
-        </p>
+      <main className="max-w-5xl mx-auto px-4 py-12">
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold text-slate-800 mb-3">
+            台本香盤表ジェネレーター
+          </h1>
+          <p className="text-slate-600 text-lg">
+            PDF・Word・テキストの台本から香盤表を自動生成
+          </p>
+        </div>
 
         {!matrixData ? (
-          <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-md p-6 mb-8">
-            {/* Input Mode Toggle */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                入力方法を選択
+          <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
+            {/* Password Input */}
+            <div className="mb-8 p-6 bg-amber-50 border border-amber-200 rounded-xl">
+              <label className="block text-sm font-semibold text-amber-800 mb-2">
+                合言葉を入力してください
               </label>
-              <div className="flex gap-4">
-                <button
-                  type="button"
-                  onClick={() => setInputMode('pdf')}
-                  className={`px-4 py-2 rounded-lg font-medium ${
-                    inputMode === 'pdf'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  PDFアップロード
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInputMode('text')}
-                  className={`px-4 py-2 rounded-lg font-medium ${
-                    inputMode === 'text'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  テキスト直接入力
-                </button>
-              </div>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  setPasswordError('')
+                }}
+                placeholder="合言葉"
+                className="w-full px-4 py-3 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+              />
+              {passwordError && (
+                <p className="mt-2 text-red-600 text-sm font-medium">{passwordError}</p>
+              )}
             </div>
 
-            {inputMode === 'pdf' ? (
+            <form onSubmit={handleSubmit}>
+              {/* Input Mode Toggle */}
               <div className="mb-6">
-                <label
-                  htmlFor="pdf-file"
-                  className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                  台本PDFファイル
+                <label className="block text-sm font-semibold text-slate-700 mb-3">
+                  入力方法を選択
                 </label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  id="pdf-file"
-                  accept=".pdf"
-                  onChange={handleFileChange}
-                  className="block w-full text-sm text-gray-500
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-lg file:border-0
-                    file:text-sm file:font-semibold
-                    file:bg-blue-50 file:text-blue-700
-                    hover:file:bg-blue-100
-                    border border-gray-300 rounded-lg p-2"
-                />
-                {file && (
-                  <p className="mt-2 text-sm text-green-600">
-                    選択されたファイル: {file.name}
-                  </p>
-                )}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setInputMode('file')}
+                    className={`px-6 py-3 rounded-xl font-medium transition-all ${
+                      inputMode === 'file'
+                        ? 'bg-blue-600 text-white shadow-lg'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    ファイルアップロード
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInputMode('text')}
+                    className={`px-6 py-3 rounded-xl font-medium transition-all ${
+                      inputMode === 'text'
+                        ? 'bg-blue-600 text-white shadow-lg'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    テキスト直接入力
+                  </button>
+                </div>
               </div>
-            ) : (
-              <div className="mb-6">
-                <label
-                  htmlFor="script-text"
-                  className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                  台本テキスト
-                </label>
-                <textarea
-                  id="script-text"
-                  value={scriptText}
-                  onChange={(e) => setScriptText(e.target.value)}
-                  placeholder="ここに台本のテキストを貼り付けてください..."
-                  className="w-full h-64 p-4 border border-gray-300 rounded-lg resize-y
-                    focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                    text-sm"
-                />
-              </div>
-            )}
 
-            {error && (
-              <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-red-700">{error}</p>
-              </div>
-            )}
+              {inputMode === 'file' && (
+                <div className="mb-6">
+                  <label className="block text-sm font-semibold text-slate-700 mb-3">
+                    ファイル形式
+                  </label>
+                  <div className="flex gap-2 mb-4">
+                    {(['pdf', 'docx', 'txt'] as FileType[]).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => {
+                          setFileType(type)
+                          setFile(null)
+                        }}
+                        className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                          fileType === type
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {type === 'pdf' && 'PDF'}
+                        {type === 'docx' && 'Word'}
+                        {type === 'txt' && 'テキスト'}
+                      </button>
+                    ))}
+                  </div>
 
-            <button
-              type="submit"
-              disabled={isLoading || (inputMode === 'pdf' ? !file : !scriptText.trim())}
-              className={`w-full py-3 px-4 rounded-lg font-semibold text-white
-                ${isLoading || (inputMode === 'pdf' ? !file : !scriptText.trim())
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700'
-                }`}
-            >
-              {isLoading ? getLoadingText(loadingStep) : '香盤表を生成'}
-            </button>
-          </form>
+                  <label
+                    htmlFor="file-input"
+                    className="block text-sm font-semibold text-slate-700 mb-2"
+                  >
+                    {getFileTypeLabel()}ファイルを選択
+                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    id="file-input"
+                    accept={getFileAccept()}
+                    onChange={handleFileChange}
+                    className="block w-full text-sm text-slate-500
+                      file:mr-4 file:py-3 file:px-6
+                      file:rounded-xl file:border-0
+                      file:text-sm file:font-semibold
+                      file:bg-blue-50 file:text-blue-700
+                      hover:file:bg-blue-100
+                      border border-slate-300 rounded-xl p-3
+                      focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  {file && (
+                    <p className="mt-3 text-sm text-green-600 font-medium">
+                      ✓ {file.name}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {inputMode === 'text' && (
+                <div className="mb-6">
+                  <label
+                    htmlFor="script-text"
+                    className="block text-sm font-semibold text-slate-700 mb-2"
+                  >
+                    台本テキスト
+                  </label>
+                  <textarea
+                    id="script-text"
+                    value={scriptText}
+                    onChange={(e) => setScriptText(e.target.value)}
+                    placeholder="ここに台本のテキストを貼り付けてください..."
+                    className="w-full h-64 p-4 border border-slate-300 rounded-xl resize-y
+                      focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                      text-sm"
+                  />
+                </div>
+              )}
+
+              {error && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
+                  <p className="text-red-700 font-medium">⚠ {error}</p>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className={`w-full py-4 px-6 rounded-xl font-bold text-lg text-white transition-all
+                  ${isLoading
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl'
+                  }`}
+              >
+                {isLoading ? getLoadingText(loadingStep) : '香盤表を生成'}
+              </button>
+            </form>
+          </div>
         ) : (
-          <div className="mb-4 flex gap-4">
+          <div className="mb-6 flex gap-4 justify-center">
             <button
               onClick={handleReset}
-              className="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-lg font-semibold"
+              className="bg-slate-600 hover:bg-slate-700 text-white py-3 px-6 rounded-xl font-semibold shadow-lg transition-all"
             >
               新しいファイルをアップロード
             </button>
             <button
               onClick={downloadCSV}
-              className="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg font-semibold"
+              className="bg-green-600 hover:bg-green-700 text-white py-3 px-6 rounded-xl font-semibold shadow-lg transition-all"
             >
               CSVダウンロード
             </button>
@@ -362,12 +476,12 @@ export default function Home() {
         )}
 
         {isLoading && (
-          <div className="text-center py-12 bg-white rounded-lg shadow-md">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent mb-4"></div>
-            <p className="text-gray-600 font-medium">{getLoadingText(loadingStep)}</p>
-            <div className="mt-4 w-64 mx-auto bg-gray-200 rounded-full h-2">
+          <div className="text-center py-12 bg-white rounded-2xl shadow-xl">
+            <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mb-4"></div>
+            <p className="text-slate-600 font-medium text-lg">{getLoadingText(loadingStep)}</p>
+            <div className="mt-6 w-72 mx-auto bg-slate-200 rounded-full h-3">
               <div 
-                className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 h-3 rounded-full transition-all duration-500"
                 style={{ 
                   width: loadingStep === 'uploading' ? '20%' : 
                          loadingStep === 'parsing' ? '40%' : 
@@ -380,87 +494,87 @@ export default function Home() {
         )}
 
         {matrixData && (
-          <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="p-4 bg-gray-100 border-b flex justify-between items-center">
-              <h2 className="text-xl font-bold text-gray-900">香盤表</h2>
-              <p className="text-sm text-gray-600">
+          <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+            <div className="p-6 bg-gradient-to-r from-slate-100 to-slate-50 border-b flex justify-between items-center">
+              <h2 className="text-2xl font-bold text-slate-800">香盤表</h2>
+              <p className="text-sm text-slate-600 font-medium">
                 全{matrixData.scenes.length}シーン · {matrixData.characters.length}キャラクター
               </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse">
                 <thead>
-                  <tr className="bg-gray-50">
+                  <tr className="bg-slate-50">
                     <th 
                       onClick={() => handleSort('scene')}
-                      className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border cursor-pointer hover:bg-gray-100 select-none"
+                      className="px-4 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none"
                     >
                       シーン {sortConfig?.key === 'scene' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     <th 
                       onClick={() => handleSort('location')}
-                      className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border cursor-pointer hover:bg-gray-100 select-none"
+                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none"
                     >
                       場所 {sortConfig?.key === 'location' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     <th 
                       onClick={() => handleSort('timeOfDay')}
-                      className="px-2 py-3 text-center text-sm font-semibold text-gray-900 border cursor-pointer hover:bg-gray-100 select-none w-16"
+                      className="px-2 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none w-16"
                     >
                       D/N {sortConfig?.key === 'timeOfDay' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     <th 
                       onClick={() => handleSort('content')}
-                      className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border cursor-pointer hover:bg-gray-100 select-none min-w-[200px]"
+                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none min-w-[200px]"
                     >
                       内容 {sortConfig?.key === 'content' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     {matrixData.characters.map((char) => (
                       <th
                         key={char}
-                        className="px-2 py-3 text-center text-sm font-semibold text-gray-900 border w-12"
+                        className="px-2 py-4 text-center text-sm font-bold text-slate-800 border w-12"
                       >
                         <div style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
                           {char}
                         </div>
                       </th>
                     ))}
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border min-w-[150px]">
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[150px]">
                       小道具
                     </th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 border min-w-[150px]">
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[150px]">
                       備考
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {matrixData.scenes.map((scene, index) => (
-                    <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-4 py-2 border font-medium">
+                    <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                      <td className="px-4 py-3 border text-center font-bold text-slate-700">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'scene', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded min-w-[40px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[40px]"
                         >
                           {scene.scene}
                         </div>
                       </td>
-                      <td className="px-4 py-2 border">
+                      <td className="px-4 py-3 border text-left">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'location', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded min-w-[80px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[80px]"
                         >
                           {scene.location}
                         </div>
                       </td>
-                      <td className="px-2 py-2 border text-center">
+                      <td className="px-2 py-3 border text-center">
                         <select
                           value={scene.timeOfDay}
                           onChange={(e) => handleCellEdit(index, 'timeOfDay', e.target.value)}
-                          className="w-full text-center bg-transparent outline-none focus:bg-yellow-50 rounded"
+                          className="w-full text-center bg-transparent outline-none focus:bg-yellow-50 rounded py-1"
                         >
                           <option value=""></option>
                           <option value="M">朝</option>
@@ -469,12 +583,12 @@ export default function Home() {
                           <option value="N">夜</option>
                         </select>
                       </td>
-                      <td className="px-4 py-2 border">
+                      <td className="px-4 py-3 border text-left">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'content', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded min-w-[200px] whitespace-pre-wrap"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[200px] whitespace-pre-wrap"
                         >
                           {scene.content}
                         </div>
@@ -482,34 +596,34 @@ export default function Home() {
                       {matrixData.characters.map((char) => (
                         <td
                           key={char}
-                          className="px-2 py-2 border text-center cursor-pointer hover:bg-blue-50"
+                          className="px-2 py-3 border text-center cursor-pointer hover:bg-blue-50"
                           onClick={() => handleCharacterToggle(index, char)}
                         >
                           {scene.characters[char] ? (
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-500 text-white text-sm font-bold">
+                            <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-500 text-white text-sm font-bold">
                               ○
                             </span>
                           ) : (
-                            <span className="text-gray-200">○</span>
+                            <span className="text-slate-200">○</span>
                           )}
                         </td>
                       ))}
-                      <td className="px-4 py-2 border">
+                      <td className="px-4 py-3 border text-left">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'props', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded min-w-[100px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[100px]"
                         >
                           {scene.props}
                         </div>
                       </td>
-                      <td className="px-4 py-2 border">
+                      <td className="px-4 py-3 border text-left">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded min-w-[100px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[100px]"
                         >
                           {scene.notes}
                         </div>
@@ -521,15 +635,17 @@ export default function Home() {
             </div>
           </div>
         )}
-      </div>
+      </main>
 
       {/* Ad Space Bottom */}
-      <div className="max-w-7xl mx-auto mt-8">
-        <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg p-8 text-center">
-          <p className="text-gray-500 text-sm">広告枠（Ad Space）</p>
-          <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
+      <div className="w-full bg-gray-200 border-t border-gray-300 mt-12">
+        <div className="max-w-5xl mx-auto py-4 px-4 text-center">
+          <div className="bg-gray-300 border-2 border-dashed border-gray-400 rounded-lg py-6">
+            <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
+            <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
+          </div>
         </div>
       </div>
-    </main>
+    </div>
   )
 }
