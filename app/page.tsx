@@ -19,9 +19,78 @@ interface MatrixData {
 
 type InputMode = 'file' | 'text'
 type FileType = 'pdf' | 'docx' | 'txt'
-type LoadingStep = 'idle' | 'uploading' | 'parsing' | 'analyzing' | 'structuring' | 'complete'
 
 const CORRECT_PASSWORD = 'kouban2026'
+const CHUNK_SIZE = 6000
+const OVERLAP_SIZE = 500
+
+// テキストをオーバーラップ付きで分割
+function splitTextIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
+  const chunks: string[] = []
+  let position = 0
+  
+  while (position < text.length) {
+    const end = Math.min(position + chunkSize, text.length)
+    const chunk = text.slice(position, end)
+    chunks.push(chunk)
+    position = end - overlap
+    if (position >= text.length) break
+  }
+  
+  return chunks
+}
+
+// キャラクター名から年齢を抽出
+function extractCharacterWithAge(name: string): { name: string; age?: string } {
+  const ageMatch = name.match(/(.+?)\s*[(\uff08](\d+)[)\uff09]/)
+  if (ageMatch) {
+    return { name: ageMatch[1].trim(), age: ageMatch[2] }
+  }
+  return { name: name.trim() }
+}
+
+// キャラクターリストを統合（年齢付きを区別）
+function mergeCharacters(existing: string[], newChars: string[]): string[] {
+  const merged = new Set(existing)
+  for (const char of newChars) {
+    const { name, age } = extractCharacterWithAge(char)
+    if (age) {
+      merged.add(`${name}(${age})`)
+    } else {
+      merged.add(name)
+    }
+  }
+  return Array.from(merged).sort()
+}
+
+// シーンを統合（重複排除）
+function mergeScenes(scenes: any[][]): any[] {
+  const seen = new Set<string>()
+  const merged: any[] = []
+  
+  for (const sceneList of scenes) {
+    for (const scene of sceneList) {
+      const key = `${scene.scene}-${scene.location}-${scene.content?.slice(0, 50)}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        merged.push(scene)
+      }
+    }
+  }
+  
+  // シーン番号でソート
+  return merged.sort((a, b) => {
+    const aParts = a.scene.split('-').map(Number)
+    const bParts = b.scene.split('-').map(Number)
+    
+    for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+      const aVal = aParts[i] || 0
+      const bVal = bParts[i] || 0
+      if (aVal !== bVal) return aVal - bVal
+    }
+    return 0
+  })
+}
 
 export default function Home() {
   const [inputMode, setInputMode] = useState<InputMode>('file')
@@ -30,23 +99,12 @@ export default function Home() {
   const [scriptText, setScriptText] = useState('')
   const [password, setPassword] = useState('')
   const [passwordError, setPasswordError] = useState('')
-  const [loadingStep, setLoadingStep] = useState<LoadingStep>('idle')
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [progress, setProgress] = useState({ current: 0, total: 0, message: '' })
   const [error, setError] = useState<string>('')
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const getLoadingText = (step: LoadingStep) => {
-    const texts: Record<LoadingStep, string> = {
-      idle: '',
-      uploading: 'ファイルをアップロード中...',
-      parsing: 'ファイルを解析中...',
-      analyzing: 'シーン情報を抽出中...',
-      structuring: '香盤表を構築中...',
-      complete: '完了',
-    }
-    return texts[step]
-  }
 
   const getFileAccept = () => {
     switch (fileType) {
@@ -80,13 +138,6 @@ export default function Home() {
     fileInputRef.current?.click()
   }
 
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
-  const updateLoadingStep = async (step: LoadingStep) => {
-    setLoadingStep(step)
-    await sleep(800)
-  }
-
   const validatePassword = () => {
     if (password !== CORRECT_PASSWORD) {
       setPasswordError('パスワードが正しくありません')
@@ -94,6 +145,105 @@ export default function Home() {
     }
     setPasswordError('')
     return true
+  }
+
+  const processInParallel = async (text: string) => {
+    const chunks = splitTextIntoChunks(text, CHUNK_SIZE, OVERLAP_SIZE)
+    const totalChunks = chunks.length
+    
+    setProgress({ current: 0, total: totalChunks, message: `0/${totalChunks} セクション処理完了` })
+    
+    let completedCount = 0
+    const results: any[] = []
+    const allCharacters: string[] = []
+    
+    // 並列処理（最大3件同時）
+    const processChunk = async (chunk: string, index: number) => {
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            text: chunk, 
+            password,
+            part: index,
+            total: totalChunks
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`セクション ${index + 1} の処理に失敗: ${errorText}`)
+        }
+
+        const data = await response.json()
+        
+        if (!data.is_script) {
+          throw new Error(data.error_message || '台本形式ではありません')
+        }
+
+        results.push(data)
+        
+        // キャラクターを統合
+        if (data.characters) {
+          for (const char of data.characters) {
+            if (!allCharacters.includes(char)) {
+              allCharacters.push(char)
+            }
+          }
+        }
+        
+        completedCount++
+        setProgress({ 
+          current: completedCount, 
+          total: totalChunks, 
+          message: `${completedCount}/${totalChunks} セクション処理完了` 
+        })
+        
+        return data
+      } catch (err) {
+        completedCount++
+        throw err
+      }
+    }
+    
+    // 3件ずつ並列処理
+    for (let i = 0; i < chunks.length; i += 3) {
+      const batch = chunks.slice(i, i + 3)
+      const batchPromises = batch.map((chunk, idx) => processChunk(chunk, i + idx))
+      await Promise.all(batchPromises)
+    }
+    
+    // 結果を統合
+    const allScenes = results.flatMap(r => r.scenes || [])
+    const mergedScenes = mergeScenes([allScenes])
+    const sortedCharacters = allCharacters.sort()
+    
+    // キャラクター出席を再計算
+    const processedScenes = mergedScenes.map((scene: any) => ({
+      scene: scene.scene,
+      location: scene.location,
+      timeOfDay: scene.timeOfDay,
+      content: scene.content,
+      characters: sortedCharacters.reduce((acc, char) => {
+        const { name } = extractCharacterWithAge(char)
+        const isPresent = scene.characters?.some((sc: string) => {
+          const scName = extractCharacterWithAge(sc).name
+          return sc === char || scName === name
+        })
+        acc[char] = isPresent
+        return acc
+      }, {} as Record<string, boolean>),
+      props: scene.props || '',
+      notes: scene.notes || ''
+    }))
+    
+    return {
+      characters: sortedCharacters,
+      scenes: processedScenes
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -104,74 +254,78 @@ export default function Home() {
     }
 
     setError('')
-    setLoadingStep('uploading')
+    setIsProcessing(true)
 
     try {
-      let payload: { pdfData?: string; docxData?: string; text?: string }
+      let fullText = ''
 
       if (inputMode === 'file') {
         if (!file) {
           setError('ファイルを選択してください')
-          setLoadingStep('idle')
+          setIsProcessing(false)
           return
         }
-        const arrayBuffer = await file.arrayBuffer()
-        const base64 = btoa(
-          new Uint8Array(arrayBuffer).reduce(
-            (data, byte) => data + String.fromCharCode(byte),
-            ''
-          )
-        )
         
-        if (fileType === 'pdf') {
-          payload = { pdfData: base64 }
-        } else if (fileType === 'docx') {
-          payload = { docxData: base64 }
+        if (fileType === 'txt') {
+          fullText = await file.text()
         } else {
-          const text = await file.text()
-          payload = { text }
+          // PDF/DOCXはBase64で送信（バックエンドで処理）
+          const arrayBuffer = await file.arrayBuffer()
+          const base64 = btoa(
+            new Uint8Array(arrayBuffer).reduce(
+              (data, byte) => data + String.fromCharCode(byte),
+              ''
+            )
+          )
+          
+          setProgress({ current: 0, total: 1, message: 'ファイルを解析中...' })
+          
+          const payload = fileType === 'pdf' 
+            ? { pdfData: base64, password }
+            : { docxData: base64, password }
+            
+          const response = await fetch('/api/generate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`ファイル解析エラー: ${errorText}`)
+          }
+
+          const data = await response.json()
+          
+          if (!data.is_script) {
+            setError(data.error_message || '台本形式ではありません')
+            setIsProcessing(false)
+            return
+          }
+
+          setMatrixData(data)
+          setIsProcessing(false)
+          return
         }
-        await updateLoadingStep('parsing')
       } else {
         if (!scriptText.trim()) {
           setError('台本テキストを入力してください')
-          setLoadingStep('idle')
+          setIsProcessing(false)
           return
         }
-        payload = { text: scriptText }
-        await updateLoadingStep('parsing')
+        fullText = scriptText
       }
 
-      await updateLoadingStep('analyzing')
-
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      })
-
-      await updateLoadingStep('structuring')
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || '香盤表の生成に失敗しました')
-      }
-
-      const data = await response.json()
-
-      if (!data.is_script) {
-        setError(data.error_message || '台本形式ではありません')
-        setLoadingStep('idle')
-        return
-      }
-
-      await updateLoadingStep('complete')
-      setMatrixData(data)
+      // テキストの並列処理
+      const result = await processInParallel(fullText)
+      setMatrixData(result)
+      
     } catch (err) {
       setError(err instanceof Error ? err.message : '予期しないエラーが発生しました')
-      setLoadingStep('idle')
+    } finally {
+      setIsProcessing(false)
     }
   }
 
@@ -264,14 +418,11 @@ export default function Home() {
     setScriptText('')
     setMatrixData(null)
     setError('')
-    setLoadingStep('idle')
-    setSortConfig(null)
+    setProgress({ current: 0, total: 0, message: '' })
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
-
-  const isLoading = loadingStep !== 'idle' && loadingStep !== 'complete'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -352,48 +503,25 @@ export default function Home() {
                     ファイル形式を選択する
                   </label>
                   <div className="flex gap-3 mb-6">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFileType('pdf')
-                        setFile(null)
-                      }}
-                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
-                        fileType === 'pdf'
-                          ? 'bg-blue-600 text-white shadow-md'
-                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      PDF
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFileType('docx')
-                        setFile(null)
-                      }}
-                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
-                        fileType === 'docx'
-                          ? 'bg-blue-600 text-white shadow-md'
-                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      Word
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFileType('txt')
-                        setFile(null)
-                      }}
-                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
-                        fileType === 'txt'
-                          ? 'bg-blue-600 text-white shadow-md'
-                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      テキスト
-                    </button>
+                    {(['pdf', 'docx', 'txt'] as FileType[]).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => {
+                          setFileType(type)
+                          setFile(null)
+                        }}
+                        className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
+                          fileType === type
+                            ? 'bg-blue-600 text-white shadow-md'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        {type === 'pdf' && 'PDF'}
+                        {type === 'docx' && 'Word'}
+                        {type === 'txt' && 'テキスト'}
+                      </button>
+                    ))}
                   </div>
 
                   <input
@@ -442,14 +570,14 @@ export default function Home() {
 
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isProcessing}
                 className={`w-full py-4 px-6 rounded-xl font-bold text-lg text-white transition-all
-                  ${isLoading
+                  ${isProcessing
                     ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl'
                   }`}
               >
-                {isLoading ? getLoadingText(loadingStep) : '香盤表を生成'}
+                {isProcessing ? '処理中...' : '香盤表を生成'}
               </button>
             </form>
           </div>
@@ -470,18 +598,15 @@ export default function Home() {
           </div>
         )}
 
-        {isLoading && (
+        {isProcessing && (
           <div className="text-center py-12 bg-white rounded-2xl shadow-lg mb-8">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mb-4"></div>
-            <p className="text-slate-600 font-medium text-lg">{getLoadingText(loadingStep)}</p>
+            <p className="text-slate-600 font-medium text-lg">{progress.message}</p>
             <div className="mt-6 w-72 mx-auto bg-slate-200 rounded-full h-3">
               <div 
-                className="bg-blue-600 h-3 rounded-full transition-all duration-500"
+                className="bg-blue-600 h-3 rounded-full transition-all duration-300"
                 style={{ 
-                  width: loadingStep === 'uploading' ? '20%' : 
-                         loadingStep === 'parsing' ? '40%' : 
-                         loadingStep === 'analyzing' ? '60%' : 
-                         loadingStep === 'structuring' ? '80%' : '100%' 
+                  width: progress.total > 0 ? `${(progress.current / progress.total) * 100}%` : '0%'
                 }}
               ></div>
             </div>
