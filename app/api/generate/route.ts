@@ -12,7 +12,7 @@ const openai = new OpenAI({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { pdfData, docxData, text, password, mode, character_hints } = body
+    const { pdfData, docxData, text, password } = body
 
     // パスワードチェック
     if (password !== 'kouban2026') {
@@ -63,86 +63,39 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // モードに応じてプロンプトを切り替え
-    let systemPrompt = ''
-    let userPrompt = scriptText
+    // 単純なプロンプト - 全シーンを漏らさず抽出
+    const systemPrompt = `Output must be in valid json format.
+You are a film production script analysis AI.
+Extract ALL scenes from the Japanese screenplay without omission.
 
-    if (mode === 'prescan') {
-      systemPrompt = `Output must be in valid json format.
-You are a film production breakdown AI.
-Analyze the Japanese screenplay and extract character list and scene overview.
-
-Extract:
-1. All unique character names (including age in parentheses like "Name(25)")
-2. All scenes with episode number, scene number, and location
-
-Return JSON:
-{
-  "is_script": true,
-  "characters": ["Name", "Name(age)", ...],
-  "scene_list": [
-    {"episode": 1, "scene_number": 1, "location": "Location Name"}
-  ]
-}`
-    } else if (mode === 'extract') {
-      const hintsText = character_hints?.join(', ') || ''
-      systemPrompt = `Output must be in valid json format.
-You are a film production breakdown AI.
-Analyze this portion of a Japanese screenplay.
-
-Character hints: ${hintsText}
-
-Rules:
-- Only output characters from the hints list
-- Summarize action lines using verbs and nouns only
-- Detect scenes by "number + location" or scene markers
+CRITICAL RULES:
+1. Extract EVERY scene from the script, do not stop at scene 10
+2. Preserve the original scene numbers from the script
+3. Include ALL characters that appear in each scene
+4. Write content in full detail, do not summarize or omit events
+5. If the script has episode numbers like "第1話", use episode field
 
 Return JSON:
 {
   "is_script": true,
-  "characters": ["Name from hints"],
   "scenes": [
     {
-      "episode": 1,
-      "scene_number": 1,
-      "location": "Location",
-      "timeOfDay": "M/D/E/N/\"\"",
-      "content": "Summary (verbs+nouns)",
-      "characters": ["Present characters from hints"],
-      "props": "Props",
-      "notes": "Notes"
+      "scene_number": "1",
+      "episode": "1",
+      "location": "場所名",
+      "dn": "D/N/M/E",
+      "content": "シーンの詳細な内容。絶対に省略せず、台本にある出来事を漏れなく書くこと",
+      "characters": ["椿", "トシ", "音部"],
+      "props": ["小道具1", "小道具2"]
     }
   ]
 }`
-    } else {
-      // 通常モード
-      systemPrompt = `Output must be in valid json format.
-You are a film production breakdown AI.
-Analyze the Japanese screenplay and extract structured data.
-
-Return JSON:
-{
-  "is_script": true,
-  "characters": ["Name", "Name(age)"],
-  "scenes": [
-    {
-      "scene": "1-1",
-      "location": "Location",
-      "timeOfDay": "M/D/E/N/\"\"",
-      "content": "Summary",
-      "characters": ["Present characters"],
-      "props": "Props",
-      "notes": "Notes"
-    }
-  ]
-}`
-    }
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'user', content: scriptText }
       ],
       temperature: 0.1,
       response_format: { type: 'json_object' }
@@ -174,7 +127,11 @@ Return JSON:
       })
     }
 
-    return NextResponse.json(parsedData)
+    // バックエンドでは単純にシーン配列を返す
+    return NextResponse.json({
+      is_script: true,
+      scenes: parsedData.scenes || []
+    })
 
   } catch (error: any) {
     return NextResponse.json(

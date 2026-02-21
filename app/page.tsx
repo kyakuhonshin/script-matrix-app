@@ -19,34 +19,22 @@ interface MatrixData {
 
 type InputMode = 'file' | 'text'
 type FileType = 'pdf' | 'docx' | 'txt'
-type ProcessingStep = 'idle' | 'prescan' | 'extraction' | 'complete'
 
 const CORRECT_PASSWORD = 'kouban2026'
-const CHUNK_SIZE = 6000
-const OVERLAP_SIZE = 500
-const MAX_RETRIES = 3
+const CHUNK_SIZE = 8000
 
-function splitTextIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
+// テキストを分割（単純にチャンク化）
+function splitTextIntoChunks(text: string, chunkSize: number): string[] {
   const chunks: string[] = []
   let position = 0
   
   while (position < text.length) {
     const end = Math.min(position + chunkSize, text.length)
-    const chunk = text.slice(position, end)
-    chunks.push(chunk)
-    position = end - overlap
-    if (position >= text.length) break
+    chunks.push(text.slice(position, end))
+    position = end
   }
   
   return chunks
-}
-
-function extractCharacterWithAge(name: string): { name: string; age?: string } {
-  const ageMatch = name.match(/(.+?)\s*[(\uff08](\d+)[)\uff09]/)
-  if (ageMatch) {
-    return { name: ageMatch[1].trim(), age: ageMatch[2] }
-  }
-  return { name: name.trim() }
 }
 
 export default function Home() {
@@ -56,8 +44,8 @@ export default function Home() {
   const [scriptText, setScriptText] = useState('')
   const [password, setPassword] = useState('')
   const [passwordError, setPasswordError] = useState('')
-  const [processingStep, setProcessingStep] = useState<ProcessingStep>('idle')
-  const [progress, setProgress] = useState({ current: 0, total: 0, message: '' })
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [error, setError] = useState<string>('')
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
@@ -104,174 +92,68 @@ export default function Home() {
     return true
   }
 
-  // 単一チャンクの処理（リトライ機能付き）
-  const processChunkWithRetry = async (
-    chunk: string, 
-    index: number, 
-    characterHints: string[],
-    totalChunks: number
-  ): Promise<any> => {
-    let lastError = ''
-    
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const response = await fetch('/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            text: chunk, 
-            password,
-            mode: 'extract',
-            character_hints: characterHints
-          }),
-        })
-
-        if (!response.ok) {
-          const errorText = await response.text()
-          lastError = errorText
-          
-          if (attempt < MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
-            continue
-          }
-          
-          throw new Error(`セクション ${index + 1} の処理に失敗`)
-        }
-
-        const data = await response.json()
-        
-        if (!data.is_script) {
-          throw new Error(data.error_message || '台本形式ではありません')
-        }
-
-        return data
-      } catch (err: any) {
-        if (attempt >= MAX_RETRIES) {
-          throw err
-        }
-        lastError = err.message
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
-      }
-    }
-    
-    throw new Error(lastError || `セクション ${index + 1} の処理に失敗しました`)
-  }
-
-  // プリスキャン
-  const performPreScan = async (text: string): Promise<{ characters: string[] }> => {
-    const response = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        text: text.slice(0, 10000),
-        password,
-        mode: 'prescan'
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`プリスキャンエラー: ${errorText}`)
-    }
-
-    const data = await response.json()
-    
-    if (!data.is_script) {
-      throw new Error(data.error_message || '台本形式ではありません')
-    }
-
-    return { characters: data.characters || [] }
-  }
-
-  // 並列詳細抽出
-  const performDetailedExtraction = async (
-    text: string, 
-    characterHints: string[]
-  ): Promise<MatrixData> => {
-    const chunks = splitTextIntoChunks(text, CHUNK_SIZE, OVERLAP_SIZE)
+  // シンプルな並列処理 - Map重複排除なし、単純にconcat
+  const processTextInParallel = async (fullText: string): Promise<MatrixData> => {
+    const chunks = splitTextIntoChunks(fullText, CHUNK_SIZE)
     const totalChunks = chunks.length
     
-    setProgress({ current: 0, total: totalChunks, message: `詳細解析中 (0/${totalChunks})` })
+    setProgress({ current: 0, total: totalChunks })
     
-    let completedCount = 0
-    let failedCount = 0
-    const results: any[] = []
-    
-    for (let i = 0; i < chunks.length; i += 3) {
-      const batch = chunks.slice(i, i + 3)
-      const batchPromises = batch.map(async (chunk, idx) => {
-        const chunkIndex = i + idx
-        try {
-          const data = await processChunkWithRetry(chunk, chunkIndex, characterHints, totalChunks)
-          results.push(data)
-          completedCount++
-        } catch (err: any) {
-          console.error(`Chunk ${chunkIndex + 1} failed:`, err)
-          failedCount++
-        }
-        
-        setProgress({ 
-          current: completedCount + failedCount, 
-          total: totalChunks, 
-          message: `詳細解析中 (${completedCount + failedCount}/${totalChunks})${failedCount > 0 ? ` - ${failedCount}件失敗` : ''}` 
-        })
+    // 並列で全チャンクを処理
+    const promises = chunks.map(async (chunk, index) => {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: chunk, 
+          password
+        }),
       })
-      
-      await Promise.all(batchPromises)
-    }
-    
-    if (results.length === 0) {
-      throw new Error('全てのセクションの処理に失敗しました')
-    }
-    
-    // Mapで重複排除
-    const scenesMap = new Map<string, any>()
-    
-    for (const result of results) {
-      if (!result || !result.scenes) continue
-      
-      for (const scene of result.scenes) {
-        const episode = scene.episode || 1
-        const sceneNum = scene.scene_number || scene.scene
-        const key = `${episode}-${sceneNum}`
-        
-        if (!scenesMap.has(key) || (scene.content?.length > scenesMap.get(key).content?.length)) {
-          scenesMap.set(key, { ...scene, episode, scene_number: sceneNum })
-        }
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`セクション ${index + 1} の処理に失敗: ${errorText}`)
       }
-    }
-    
-    // ソート
-    const sortedScenes = Array.from(scenesMap.values()).sort((a, b) => {
-      if (a.episode !== b.episode) return a.episode - b.episode
-      return a.scene_number - b.scene_number
+
+      const data = await response.json()
+      
+      if (!data.is_script) {
+        throw new Error(data.error_message || '台本形式ではありません')
+      }
+
+      setProgress(prev => ({ ...prev, current: prev.current + 1 }))
+      return data.scenes || []
     })
     
+    // 全結果を待つ
+    const allScenesArrays = await Promise.all(promises)
+    
+    // 単純にconcat（重複排除なし、順序保持）
+    const allScenes = allScenesArrays.flat()
+    
+    // すべてのシーンからユニークな登場人物を収集
     const allCharacters = new Set<string>()
-    for (const result of results) {
-      if (result.characters) {
-        for (const char of result.characters) {
+    for (const scene of allScenes) {
+      if (scene.characters && Array.isArray(scene.characters)) {
+        for (const char of scene.characters) {
           allCharacters.add(char)
         }
       }
     }
     const sortedCharacters = Array.from(allCharacters).sort()
     
-    const processedScenes = sortedScenes.map((scene: any) => ({
-      scene: scene.episode > 1 ? `${scene.episode}-${scene.scene_number}` : String(scene.scene_number),
-      location: scene.location,
-      timeOfDay: scene.timeOfDay || '',
-      content: scene.content,
+    // シーンデータを整形
+    const processedScenes = allScenes.map((scene: any, index: number) => ({
+      scene: scene.scene_number || scene.scene || String(index + 1),
+      location: scene.location || '',
+      timeOfDay: scene.dn || scene.timeOfDay || '',
+      content: scene.content || '',
       characters: sortedCharacters.reduce((acc, char) => {
-        const { name } = extractCharacterWithAge(char)
-        const isPresent = scene.characters?.some((sc: string) => {
-          const scName = extractCharacterWithAge(sc).name
-          return sc === char || scName === name
-        })
+        const isPresent = scene.characters?.includes(char) || false
         acc[char] = isPresent
         return acc
       }, {} as Record<string, boolean>),
-      props: scene.props || '',
+      props: Array.isArray(scene.props) ? scene.props.join(', ') : (scene.props || ''),
       notes: scene.notes || ''
     }))
     
@@ -289,80 +171,98 @@ export default function Home() {
     }
 
     setError('')
-    setProcessingStep('prescan')
+    setIsProcessing(true)
 
     try {
-      let fullText = ''
-
+      // ファイルアップロードの場合は単純に1回のAPIコール
       if (inputMode === 'file') {
         if (!file) {
           setError('ファイルを選択してください')
-          setProcessingStep('idle')
+          setIsProcessing(false)
           return
         }
         
-        if (fileType === 'txt') {
-          fullText = await file.text()
-        } else {
-          const arrayBuffer = await file.arrayBuffer()
-          const base64 = btoa(
-            new Uint8Array(arrayBuffer).reduce(
-              (data, byte) => data + String.fromCharCode(byte),
-              ''
-            )
+        const arrayBuffer = await file.arrayBuffer()
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce(
+            (data, byte) => data + String.fromCharCode(byte),
+            ''
           )
-          
-          const payload = fileType === 'pdf' 
-            ? { pdfData: base64, password }
-            : { docxData: base64, password }
-          
-          const response = await fetch('/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
+        )
+        
+        const payload = fileType === 'pdf' 
+          ? { pdfData: base64, password }
+          : { docxData: base64, password }
+        
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
 
-          if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`ファイル解析エラー: ${errorText}`)
-          }
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`ファイル解析エラー: ${errorText}`)
+        }
 
-          const data = await response.json()
-          
-          if (!data.is_script) {
-            setError(data.error_message || '台本形式ではありません')
-            setProcessingStep('idle')
-            return
-          }
-
-          setMatrixData(data)
-          setProcessingStep('complete')
+        const data = await response.json()
+        
+        if (!data.is_script) {
+          setError(data.error_message || '台本形式ではありません')
+          setIsProcessing(false)
           return
         }
-      } else {
-        if (!scriptText.trim()) {
-          setError('台本テキストを入力してください')
-          setProcessingStep('idle')
-          return
+
+        // 単一レスポンスから登場人物を収集
+        const allScenes = data.scenes || []
+        const allCharacters = new Set<string>()
+        for (const scene of allScenes) {
+          if (scene.characters && Array.isArray(scene.characters)) {
+            for (const char of scene.characters) {
+              allCharacters.add(char)
+            }
+          }
         }
-        fullText = scriptText
+        const sortedCharacters = Array.from(allCharacters).sort()
+        
+        const processedScenes = allScenes.map((scene: any, index: number) => ({
+          scene: scene.scene_number || scene.scene || String(index + 1),
+          location: scene.location || '',
+          timeOfDay: scene.dn || scene.timeOfDay || '',
+          content: scene.content || '',
+          characters: sortedCharacters.reduce((acc, char) => {
+            const isPresent = scene.characters?.includes(char) || false
+            acc[char] = isPresent
+            return acc
+          }, {} as Record<string, boolean>),
+          props: Array.isArray(scene.props) ? scene.props.join(', ') : (scene.props || ''),
+          notes: scene.notes || ''
+        }))
+
+        setMatrixData({
+          characters: sortedCharacters,
+          scenes: processedScenes
+        })
+        setIsProcessing(false)
+        return
       }
-
-      // Phase 1: Pre-scan
-      setProgress({ current: 0, total: 1, message: '1. 登場人物を特定中...' })
-      const { characters } = await performPreScan(fullText)
       
-      // Phase 2: Parallel extraction
-      setProcessingStep('extraction')
-      const result = await performDetailedExtraction(fullText, characters)
+      // テキスト入力の場合
+      if (!scriptText.trim()) {
+        setError('台本テキストを入力してください')
+        setIsProcessing(false)
+        return
+      }
       
+      // 長いテキストは並列処理
+      const result = await processTextInParallel(scriptText)
       setMatrixData(result)
-      setProcessingStep('complete')
       
     } catch (err: any) {
       console.error('Processing error:', err)
       setError(err.message || '予期しないエラーが発生しました')
-      setProcessingStep('idle')
+    } finally {
+      setIsProcessing(false)
     }
   }
 
@@ -455,14 +355,12 @@ export default function Home() {
     setScriptText('')
     setMatrixData(null)
     setError('')
-    setProcessingStep('idle')
-    setProgress({ current: 0, total: 0, message: '' })
+    setIsProcessing(false)
+    setProgress({ current: 0, total: 0 })
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
-
-  const isProcessing = processingStep !== 'idle' && processingStep !== 'complete'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -482,7 +380,7 @@ export default function Home() {
             香盤表ジェネレーター
           </h1>
           <p className="text-slate-600 text-lg max-w-2xl mx-auto">
-            台本（PDF/Word/テキスト）を解析し、香盤表を自動生成。CSVダウンロードも可能。最新の高速並列エンジンで長編台本も一瞬で解析します。
+            台本（PDF/Word/テキスト）を解析し、香盤表を自動生成。全シーンを漏らさず抽出します。
           </p>
         </div>
 
@@ -579,10 +477,6 @@ export default function Home() {
                   >
                     {file ? `✓ ${file.name}` : 'ファイルを選択'}
                   </button>
-                  
-                  <p className="mt-4 text-sm text-slate-500">
-                    ※ 長い台本は読み込めない可能性があります。PDFの場合、話数ごとに分割して読み込むと成功する確率が上がります。
-                  </p>
                 </div>
               )}
 
@@ -621,7 +515,7 @@ export default function Home() {
                     : 'bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl'
                   }`}
               >
-                {isProcessing ? '処理中...' : '香盤表を生成'}
+                {isProcessing ? `処理中 (${progress.current}/${progress.total})` : '香盤表を生成'}
               </button>
             </form>
           </div>
@@ -645,15 +539,17 @@ export default function Home() {
         {isProcessing && (
           <div className="text-center py-12 bg-white rounded-2xl shadow-lg mb-8">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mb-4"></div>
-            <p className="text-slate-600 font-medium text-lg">{progress.message}</p>
-            <div className="mt-6 w-72 mx-auto bg-slate-200 rounded-full h-3">
-              <div 
-                className="bg-blue-600 h-3 rounded-full transition-all duration-300"
-                style={{ 
-                  width: progress.total > 0 ? `${(progress.current / progress.total) * 100}%` : '0%'
-                }}
-              ></div>
-            </div>
+            <p className="text-slate-600 font-medium text-lg">
+              {progress.total > 0 ? `処理中... (${progress.current}/${progress.total})` : '処理中...'}
+            </p>
+            {progress.total > 0 && (
+              <div className="mt-6 w-72 mx-auto bg-slate-200 rounded-full h-3">
+                <div 
+                  className="bg-blue-600 h-3 rounded-full transition-all duration-300"
+                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                ></div>
+              </div>
+            )}
           </div>
         )}
 
