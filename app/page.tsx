@@ -26,7 +26,6 @@ const CHUNK_SIZE = 6000
 const OVERLAP_SIZE = 500
 const MAX_RETRIES = 3
 
-// テキストをオーバーラップ付きで分割
 function splitTextIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
   const chunks: string[] = []
   let position = 0
@@ -42,7 +41,6 @@ function splitTextIntoChunks(text: string, chunkSize: number, overlap: number): 
   return chunks
 }
 
-// キャラクター名から年齢を抽出
 function extractCharacterWithAge(name: string): { name: string; age?: string } {
   const ageMatch = name.match(/(.+?)\s*[(\uff08](\d+)[)\uff09]/)
   if (ageMatch) {
@@ -61,7 +59,6 @@ export default function Home() {
   const [processingStep, setProcessingStep] = useState<ProcessingStep>('idle')
   const [progress, setProgress] = useState({ current: 0, total: 0, message: '' })
   const [error, setError] = useState<string>('')
-  const [showSplitAdvice, setShowSplitAdvice] = useState(false)
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -88,7 +85,6 @@ export default function Home() {
         (fileType === 'docx' && selectedFile.name.endsWith('.docx'))) {
       setFile(selectedFile)
       setError('')
-      setShowSplitAdvice(false)
     } else {
       setError('適切なファイル形式を選択してください')
       setFile(null)
@@ -126,8 +122,7 @@ export default function Home() {
             text: chunk, 
             password,
             mode: 'extract',
-            character_hints: characterHints,
-            part: index
+            character_hints: characterHints
           }),
         })
 
@@ -162,8 +157,8 @@ export default function Home() {
     throw new Error(lastError || `セクション ${index + 1} の処理に失敗しました`)
   }
 
-  // プリスキャン：登場人物とシーン一覧を取得
-  const performPreScan = async (text: string): Promise<{ characters: string[], sceneList: { episode: number, scene_number: number, location: string }[] }> => {
+  // プリスキャン
+  const performPreScan = async (text: string): Promise<{ characters: string[] }> => {
     const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -185,17 +180,13 @@ export default function Home() {
       throw new Error(data.error_message || '台本形式ではありません')
     }
 
-    return {
-      characters: data.characters || [],
-      sceneList: data.scene_list || []
-    }
+    return { characters: data.characters || [] }
   }
 
-  // 並列詳細抽出（エラーリカバリー付き）
+  // 並列詳細抽出
   const performDetailedExtraction = async (
     text: string, 
-    characterHints: string[],
-    sceneList: { episode: number, scene_number: number, location: string }[]
+    characterHints: string[]
   ): Promise<MatrixData> => {
     const chunks = splitTextIntoChunks(text, CHUNK_SIZE, OVERLAP_SIZE)
     const totalChunks = chunks.length
@@ -206,7 +197,6 @@ export default function Home() {
     let failedCount = 0
     const results: any[] = []
     
-    // 3件ずつ並列処理
     for (let i = 0; i < chunks.length; i += 3) {
       const batch = chunks.slice(i, i + 3)
       const batchPromises = batch.map(async (chunk, idx) => {
@@ -231,10 +221,10 @@ export default function Home() {
     }
     
     if (results.length === 0) {
-      throw new Error('全てのセクションの処理に失敗しました。')
+      throw new Error('全てのセクションの処理に失敗しました')
     }
     
-    // 結果を統合
+    // Mapで重複排除
     const scenesMap = new Map<string, any>()
     
     for (const result of results) {
@@ -251,6 +241,7 @@ export default function Home() {
       }
     }
     
+    // ソート
     const sortedScenes = Array.from(scenesMap.values()).sort((a, b) => {
       if (a.episode !== b.episode) return a.episode - b.episode
       return a.scene_number - b.scene_number
@@ -298,7 +289,6 @@ export default function Home() {
     }
 
     setError('')
-    setShowSplitAdvice(false)
     setProcessingStep('prescan')
 
     try {
@@ -333,20 +323,8 @@ export default function Home() {
           })
 
           if (!response.ok) {
-            let errorMessage = `ファイル解析エラー: ${response.status}`
-            try {
-              const errorData = await response.json()
-              errorMessage = errorData.error || errorMessage
-            } catch {
-              const errorText = await response.text()
-              errorMessage = errorText || errorMessage
-            }
-            
-            if (file.size > 1024 * 1024) {
-              setShowSplitAdvice(true)
-            }
-            
-            throw new Error(errorMessage)
+            const errorText = await response.text()
+            throw new Error(`ファイル解析エラー: ${errorText}`)
           }
 
           const data = await response.json()
@@ -370,11 +348,13 @@ export default function Home() {
         fullText = scriptText
       }
 
+      // Phase 1: Pre-scan
       setProgress({ current: 0, total: 1, message: '1. 登場人物を特定中...' })
-      const { characters, sceneList } = await performPreScan(fullText)
+      const { characters } = await performPreScan(fullText)
       
+      // Phase 2: Parallel extraction
       setProcessingStep('extraction')
-      const result = await performDetailedExtraction(fullText, characters, sceneList)
+      const result = await performDetailedExtraction(fullText, characters)
       
       setMatrixData(result)
       setProcessingStep('complete')
@@ -475,7 +455,6 @@ export default function Home() {
     setScriptText('')
     setMatrixData(null)
     setError('')
-    setShowSplitAdvice(false)
     setProcessingStep('idle')
     setProgress({ current: 0, total: 0, message: '' })
     if (fileInputRef.current) {
@@ -489,7 +468,7 @@ export default function Home() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Ad Space Top */}
       <div className="w-full bg-gray-100 border-b border-gray-200">
-        <div className="max-w-4xl mx-auto py-4 px-4">
+        <div className="max-w-5xl mx-auto py-4 px-4">
           <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg py-8 text-center">
             <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
             <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
@@ -497,13 +476,13 @@ export default function Home() {
         </div>
       </div>
 
-      <main className="max-w-4xl mx-auto px-4 py-12">
+      <main className="max-w-5xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-slate-800 mb-4">
             香盤表ジェネレーター
           </h1>
           <p className="text-slate-600 text-lg max-w-2xl mx-auto">
-            台本（PDF/Word/テキスト）を解析し、香盤表を自動生成。CSVダウンロードも可能。長い台本も最後まで読み込みます。
+            台本（PDF/Word/テキスト）を解析し、香盤表を自動生成。CSVダウンロードも可能。最新の高速並列エンジンで長編台本も一瞬で解析します。
           </p>
         </div>
 
@@ -630,11 +609,6 @@ export default function Home() {
               {error && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
                   <p className="text-red-700 font-medium">⚠ {error}</p>
-                  {showSplitAdvice && (
-                    <p className="mt-2 text-red-600 text-sm">
-                      ファイルサイズが大きいため、話数ごとにPDFを分割してアップロードしてください。
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -819,7 +793,7 @@ export default function Home() {
 
       {/* Ad Space Bottom */}
       <div className="w-full bg-gray-100 border-t border-gray-200 mt-12">
-        <div className="max-w-4xl mx-auto py-4 px-4">
+        <div className="max-w-5xl mx-auto py-4 px-4">
           <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg py-8 text-center">
             <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
             <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>

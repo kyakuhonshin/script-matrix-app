@@ -14,14 +14,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { pdfData, docxData, text, password, mode, character_hints } = body
 
-    console.log('API called with mode:', mode)
-    console.log('Has pdfData:', !!pdfData)
-    console.log('Has docxData:', !!docxData)
-    console.log('Has text:', !!text)
-
     // パスワードチェック
     if (password !== 'kouban2026') {
-      console.log('Password mismatch')
       return NextResponse.json(
         { error: 'パスワードが正しくありません' },
         { status: 401 }
@@ -32,28 +26,22 @@ export async function POST(request: NextRequest) {
 
     // ファイル解析
     if (pdfData) {
-      console.log('Parsing PDF...')
       try {
         const buffer = Buffer.from(pdfData, 'base64')
         const pdfResult = await pdfParse(buffer)
         scriptText = pdfResult.text
-        console.log('PDF parsed, length:', scriptText.length)
       } catch (pdfError: any) {
-        console.error('PDF parse error:', pdfError)
         return NextResponse.json(
           { error: `PDF解析エラー: ${pdfError.message}` },
           { status: 400 }
         )
       }
     } else if (docxData) {
-      console.log('Parsing DOCX...')
       try {
         const buffer = Buffer.from(docxData, 'base64')
         const docxResult = await mammoth.extractRawText({ buffer })
         scriptText = docxResult.value
-        console.log('DOCX parsed, length:', scriptText.length)
       } catch (docxError: any) {
-        console.error('DOCX parse error:', docxError)
         return NextResponse.json(
           { error: `Word解析エラー: ${docxError.message}` },
           { status: 400 }
@@ -61,9 +49,7 @@ export async function POST(request: NextRequest) {
       }
     } else if (text) {
       scriptText = text
-      console.log('Text received, length:', scriptText.length)
     } else {
-      console.log('No input provided')
       return NextResponse.json(
         { error: 'ファイルまたはテキストが提供されていません' },
         { status: 400 }
@@ -71,9 +57,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (!scriptText || scriptText.trim().length === 0) {
-      console.log('Empty text after parsing')
       return NextResponse.json(
-        { error: 'テキストを取得できませんでした。ファイルが破損しているか、テキストを含んでいない可能性があります。' },
+        { error: 'テキストを取得できませんでした' },
         { status: 400 }
       )
     }
@@ -83,76 +68,76 @@ export async function POST(request: NextRequest) {
     let userPrompt = scriptText
 
     if (mode === 'prescan') {
-      systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
-入力テキストはフィクションのドラマ台本です。
+      systemPrompt = `Output must be in valid json format.
+You are a film production breakdown AI.
+Analyze the Japanese screenplay and extract character list and scene overview.
 
-【出力要件】
-1. 全登場人物を抽出（年齢付きの場合は別人として区別）
-2. 全シーンの「話数(episode)」「シーン番号(scene_number)」「場所(location)」をリスト化
-3. 話数が不明な場合は episode: 1 とする
+Extract:
+1. All unique character names (including age in parentheses like "Name(25)")
+2. All scenes with episode number, scene number, and location
 
-【出力形式】以下のJSON形式で出力してください
+Return JSON:
 {
   "is_script": true,
-  "characters": ["名前", "名前(年齢)", ...],
+  "characters": ["Name", "Name(age)", ...],
   "scene_list": [
-    {"episode": 1, "scene_number": 1, "location": "場所名"}
+    {"episode": 1, "scene_number": 1, "location": "Location Name"}
   ]
 }`
     } else if (mode === 'extract') {
       const hintsText = character_hints?.join(', ') || ''
-      systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
-入力テキストはフィクションのドラマ台本の一部です。
+      systemPrompt = `Output must be in valid json format.
+You are a film production breakdown AI.
+Analyze this portion of a Japanese screenplay.
 
-【重要】
-- ヒントにない名前は出力しない
-- ト書きを要約し、動詞と名詞のみで構成
-- シーン判定は「数字+場所名」または「◯印」を優先
+Character hints: ${hintsText}
 
-【ヒント：登場人物一覧】
-${hintsText}
+Rules:
+- Only output characters from the hints list
+- Summarize action lines using verbs and nouns only
+- Detect scenes by "number + location" or scene markers
 
-【出力形式】以下のJSON形式で出力してください
+Return JSON:
 {
   "is_script": true,
-  "characters": ["ヒントにある名前のみ"],
+  "characters": ["Name from hints"],
   "scenes": [
     {
       "episode": 1,
       "scene_number": 1,
-      "location": "場所",
+      "location": "Location",
       "timeOfDay": "M/D/E/N/\"\"",
-      "content": "要約（動詞+名詞のみ）",
-      "characters": ["登場したヒント内の名前"],
-      "props": "小道具",
-      "notes": "備考"
+      "content": "Summary (verbs+nouns)",
+      "characters": ["Present characters from hints"],
+      "props": "Props",
+      "notes": "Notes"
     }
   ]
 }`
     } else {
-      // 通常モード（ファイル直接アップロード時）
-      systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
-入力テキストはフィクションのドラマ台本です。
+      // 通常モード
+      systemPrompt = `Output must be in valid json format.
+You are a film production breakdown AI.
+Analyze the Japanese screenplay and extract structured data.
 
-【出力形式】以下のJSON形式で出力してください
+Return JSON:
 {
   "is_script": true,
-  "characters": ["名前", "名前(年齢)"],
+  "characters": ["Name", "Name(age)"],
   "scenes": [
     {
       "scene": "1-1",
-      "location": "場所",
+      "location": "Location",
       "timeOfDay": "M/D/E/N/\"\"",
-      "content": "要約",
-      "characters": ["登場人物"],
-      "props": "小道具",
-      "notes": "備考"
+      "content": "Summary",
+      "characters": ["Present characters"],
+      "props": "Props",
+      "notes": "Notes"
     }
   ]
 }`
     }
 
-    console.log('Calling OpenAI API...')
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -164,7 +149,6 @@ ${hintsText}
     })
 
     const content = completion.choices[0]?.message?.content
-    console.log('OpenAI response received')
 
     if (!content) {
       return NextResponse.json(
@@ -177,7 +161,6 @@ ${hintsText}
     try {
       parsedData = JSON.parse(content)
     } catch (parseError: any) {
-      console.error('JSON parse error:', parseError)
       return NextResponse.json(
         { error: `JSONパースエラー: ${parseError.message}` },
         { status: 500 }
@@ -194,8 +177,6 @@ ${hintsText}
     return NextResponse.json(parsedData)
 
   } catch (error: any) {
-    console.error('Unhandled error:', error)
-    
     return NextResponse.json(
       { error: `サーバーエラー: ${error.message || '不明なエラー'}` },
       { status: 500 }
