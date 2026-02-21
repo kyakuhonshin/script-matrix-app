@@ -802,4 +802,30 @@ export default function Home() {
                         <div
                           contentEditable
                           suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent
+                          onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent || '')}
+                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
+                        >
+                          {scene.notes}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Ad Space Bottom */}
+      <div className="w-full bg-gray-100 border-t border-gray-200 mt-12">
+        <div className="max-w-4xl mx-auto py-4 px-4">
+          <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg py-8 text-center">
+            <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
+            <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
