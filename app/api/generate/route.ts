@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
 2. 全シーンの「話数(episode)」「シーン番号(scene_number)」「場所(location)」をリスト化
 3. 話数が不明な場合は episode: 1 とする
 
-【出力形式】
+【出力形式】以下のJSON形式で出力してください
 {
   "is_script": true,
   "characters": ["名前", "名前(年齢)", ...],
@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
 【ヒント：登場人物一覧】
 ${hintsText}
 
-【出力形式】
+【出力形式】以下のJSON形式で出力してください
 {
   "is_script": true,
   "characters": ["ヒントにある名前のみ"],
@@ -134,7 +134,7 @@ ${hintsText}
       systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
 入力テキストはフィクションのドラマ台本です。
 
-【出力形式】
+【出力形式】以下のJSON形式で出力してください
 {
   "is_script": true,
   "characters": ["名前", "名前(年齢)"],
