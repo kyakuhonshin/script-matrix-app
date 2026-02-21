@@ -56,14 +56,6 @@ export default function Home() {
     }
   }
 
-  const getFileTypeLabel = () => {
-    switch (fileType) {
-      case 'pdf': return 'PDF'
-      case 'docx': return 'Word'
-      case 'txt': return 'テキスト'
-    }
-  }
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (!selectedFile) return
@@ -79,7 +71,7 @@ export default function Home() {
       setFile(selectedFile)
       setError('')
     } else {
-      setError(`${getFileTypeLabel()}ファイルを選択してください`)
+      setError('適切なファイル形式を選択してください')
       setFile(null)
     }
   }
@@ -217,8 +209,8 @@ export default function Home() {
       let bValue: string | number
 
       if (key === 'scene') {
-        aValue = parseInt(a.scene) || 0
-        bValue = parseInt(b.scene) || 0
+        aValue = a.scene
+        bValue = b.scene
       } else if (key === 'timeOfDay') {
         const order = { 'M': 0, 'D': 1, 'E': 2, 'N': 3, '': 4 }
         aValue = order[a.timeOfDay as keyof typeof order] ?? 5
@@ -298,10 +290,8 @@ export default function Home() {
           <h1 className="text-4xl font-bold text-slate-800 mb-4">
             香盤表ジェネレーター
           </h1>
-          <p className="text-slate-600 text-lg leading-relaxed max-w-2xl mx-auto">
-            台本（PDF/Word/テキスト）をAIが解析し、撮影に必要な香盤表を自動生成します。<br />
-            登場人物の出演シーン、シーン内容の要約、小道具の抽出を瞬時に行い、制作現場の事務作業を大幅に短縮します。<br />
-            生成された表はCSV形式でダウンロード可能です。
+          <p className="text-slate-600 text-lg max-w-2xl mx-auto">
+            台本（PDF/Word/テキスト）を解析し、香盤表を自動生成。CSVダウンロードも可能。長い台本も最後まで読み込みます。
           </p>
         </div>
 
@@ -362,25 +352,48 @@ export default function Home() {
                     ファイル形式を選択する
                   </label>
                   <div className="flex gap-3 mb-6">
-                    {(['pdf', 'docx', 'txt'] as FileType[]).map((type) => (
-                      <button
-                        key={type}
-                        type="button"
-                        onClick={() => {
-                          setFileType(type)
-                          setFile(null)
-                        }}
-                        className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
-                          fileType === type
-                            ? 'bg-blue-600 text-white shadow-md'
-                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        {type === 'pdf' && 'PDF'}
-                        {type === 'docx' && 'Word'}
-                        {type === 'txt' && 'テキスト'}
-                      </button>
-                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFileType('pdf')
+                        setFile(null)
+                      }}
+                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
+                        fileType === 'pdf'
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFileType('docx')
+                        setFile(null)
+                      }}
+                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
+                        fileType === 'docx'
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      Word
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFileType('txt')
+                        setFile(null)
+                      }}
+                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
+                        fileType === 'txt'
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      テキスト
+                    </button>
                   </div>
 
                   <input
@@ -396,7 +409,7 @@ export default function Home() {
                     onClick={handleFileSelectClick}
                     className="w-full py-4 px-6 bg-white border-2 border-dashed border-blue-400 rounded-xl text-blue-600 font-semibold hover:bg-blue-50 hover:border-blue-500 transition-all"
                   >
-                    {file ? `✓ ${file.name}` : `${getFileTypeLabel()}ファイルを選択`}
+                    {file ? `✓ ${file.name}` : 'ファイルを選択'}
                   </button>
                 </div>
               )}
@@ -489,7 +502,7 @@ export default function Home() {
                   <tr className="bg-slate-100">
                     <th 
                       onClick={() => handleSort('scene')}
-                      className="px-4 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none"
+                      className="px-3 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none"
                     >
                       シーン {sortConfig?.key === 'scene' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
@@ -501,7 +514,7 @@ export default function Home() {
                     </th>
                     <th 
                       onClick={() => handleSort('timeOfDay')}
-                      className="px-2 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none w-16"
+                      className="px-2 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none w-14"
                     >
                       D/N {sortConfig?.key === 'timeOfDay' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
@@ -514,17 +527,17 @@ export default function Home() {
                     {matrixData.characters.map((char) => (
                       <th
                         key={char}
-                        className="px-2 py-4 text-center text-sm font-bold text-slate-800 border w-12"
+                        className="px-1 py-4 text-center text-xs font-bold text-slate-800 border w-10"
                       >
-                        <div style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+                        <div className="whitespace-nowrap" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
                           {char}
                         </div>
                       </th>
                     ))}
-                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[150px]">
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[120px]">
                       小道具
                     </th>
-                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[150px]">
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[120px]">
                       備考
                     </th>
                   </tr>
@@ -532,12 +545,12 @@ export default function Home() {
                 <tbody>
                   {matrixData.scenes.map((scene, index) => (
                     <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
-                      <td className="px-4 py-3 border text-center font-bold text-slate-700">
+                      <td className="px-3 py-3 border text-center font-bold text-slate-700">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'scene', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
+                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
                         >
                           {scene.scene}
                         </div>
@@ -547,7 +560,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'location', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
+                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
                         >
                           {scene.location}
                         </div>
@@ -560,7 +573,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'content', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded whitespace-pre-wrap"
+                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded whitespace-pre-wrap"
                         >
                           {scene.content}
                         </div>
@@ -568,11 +581,11 @@ export default function Home() {
                       {matrixData.characters.map((char) => (
                         <td
                           key={char}
-                          className="px-2 py-3 border text-center cursor-pointer hover:bg-blue-50"
+                          className="px-1 py-3 border text-center cursor-pointer hover:bg-blue-50"
                           onClick={() => handleCharacterToggle(index, char)}
                         >
                           {scene.characters[char] ? (
-                            <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-500 text-white text-sm font-bold">
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-500 text-white text-xs font-bold">
                               ○
                             </span>
                           ) : (
@@ -585,7 +598,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'props', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
+                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
                         >
                           {scene.props}
                         </div>
@@ -595,7 +608,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
+                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
                         >
                           {scene.notes}
                         </div>
