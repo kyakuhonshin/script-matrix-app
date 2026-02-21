@@ -19,6 +19,7 @@ interface MatrixData {
 
 type InputMode = 'file' | 'text'
 type FileType = 'pdf' | 'docx' | 'txt'
+type ProcessingStep = 'idle' | 'prescan' | 'extraction' | 'complete'
 
 const CORRECT_PASSWORD = 'kouban2026'
 const CHUNK_SIZE = 6000
@@ -49,49 +50,6 @@ function extractCharacterWithAge(name: string): { name: string; age?: string } {
   return { name: name.trim() }
 }
 
-// キャラクターリストを統合（年齢付きを区別）
-function mergeCharacters(existing: string[], newChars: string[]): string[] {
-  const merged = new Set(existing)
-  for (const char of newChars) {
-    const { name, age } = extractCharacterWithAge(char)
-    if (age) {
-      merged.add(`${name}(${age})`)
-    } else {
-      merged.add(name)
-    }
-  }
-  return Array.from(merged).sort()
-}
-
-// シーンを統合（重複排除）
-function mergeScenes(scenes: any[][]): any[] {
-  const seen = new Set<string>()
-  const merged: any[] = []
-  
-  for (const sceneList of scenes) {
-    for (const scene of sceneList) {
-      const key = `${scene.scene}-${scene.location}-${scene.content?.slice(0, 50)}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        merged.push(scene)
-      }
-    }
-  }
-  
-  // シーン番号でソート
-  return merged.sort((a, b) => {
-    const aParts = a.scene.split('-').map(Number)
-    const bParts = b.scene.split('-').map(Number)
-    
-    for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
-      const aVal = aParts[i] || 0
-      const bVal = bParts[i] || 0
-      if (aVal !== bVal) return aVal - bVal
-    }
-    return 0
-  })
-}
-
 export default function Home() {
   const [inputMode, setInputMode] = useState<InputMode>('file')
   const [fileType, setFileType] = useState<FileType>('pdf')
@@ -99,7 +57,7 @@ export default function Home() {
   const [scriptText, setScriptText] = useState('')
   const [password, setPassword] = useState('')
   const [passwordError, setPasswordError] = useState('')
-  const [isProcessing, setIsProcessing] = useState(false)
+  const [processingStep, setProcessingStep] = useState<ProcessingStep>('idle')
   const [progress, setProgress] = useState({ current: 0, total: 0, message: '' })
   const [error, setError] = useState<string>('')
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
@@ -147,85 +105,135 @@ export default function Home() {
     return true
   }
 
-  const processInParallel = async (text: string) => {
+  // プリスキャン：登場人物とシーン一覧を取得
+  const performPreScan = async (text: string): Promise<{ characters: string[], sceneList: { episode: number, scene_number: number, location: string }[] }> => {
+    const response = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        text: text.slice(0, 10000), // 先頭1万文字でプリスキャン
+        password,
+        mode: 'prescan'
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`プリスキャンエラー: ${errorText}`)
+    }
+
+    const data = await response.json()
+    
+    if (!data.is_script) {
+      throw new Error(data.error_message || '台本形式ではありません')
+    }
+
+    return {
+      characters: data.characters || [],
+      sceneList: data.scene_list || []
+    }
+  }
+
+  // 並列詳細抽出
+  const performDetailedExtraction = async (
+    text: string, 
+    characterHints: string[],
+    sceneList: { episode: number, scene_number: number, location: string }[]
+  ): Promise<MatrixData> => {
     const chunks = splitTextIntoChunks(text, CHUNK_SIZE, OVERLAP_SIZE)
     const totalChunks = chunks.length
     
-    setProgress({ current: 0, total: totalChunks, message: `0/${totalChunks} セクション処理完了` })
+    setProgress({ current: 0, total: totalChunks, message: `詳細解析中 (0/${totalChunks})` })
     
     let completedCount = 0
     const results: any[] = []
-    const allCharacters: string[] = []
-    
-    // 並列処理（最大3件同時）
-    const processChunk = async (chunk: string, index: number) => {
-      try {
-        const response = await fetch('/api/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ 
-            text: chunk, 
-            password,
-            part: index,
-            total: totalChunks
-          }),
-        })
-
-        if (!response.ok) {
-          const errorText = await response.text()
-          throw new Error(`セクション ${index + 1} の処理に失敗: ${errorText}`)
-        }
-
-        const data = await response.json()
-        
-        if (!data.is_script) {
-          throw new Error(data.error_message || '台本形式ではありません')
-        }
-
-        results.push(data)
-        
-        // キャラクターを統合
-        if (data.characters) {
-          for (const char of data.characters) {
-            if (!allCharacters.includes(char)) {
-              allCharacters.push(char)
-            }
-          }
-        }
-        
-        completedCount++
-        setProgress({ 
-          current: completedCount, 
-          total: totalChunks, 
-          message: `${completedCount}/${totalChunks} セクション処理完了` 
-        })
-        
-        return data
-      } catch (err) {
-        completedCount++
-        throw err
-      }
-    }
     
     // 3件ずつ並列処理
     for (let i = 0; i < chunks.length; i += 3) {
       const batch = chunks.slice(i, i + 3)
-      const batchPromises = batch.map((chunk, idx) => processChunk(chunk, i + idx))
+      const batchPromises = batch.map(async (chunk, idx) => {
+        try {
+          const response = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              text: chunk, 
+              password,
+              mode: 'extract',
+              character_hints: characterHints,
+              part: i + idx
+            }),
+          })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`セクション ${i + idx + 1} の処理に失敗: ${errorText}`)
+          }
+
+          const data = await response.json()
+          
+          if (!data.is_script) {
+            return null
+          }
+
+          results.push(data)
+          
+          completedCount++
+          setProgress({ 
+            current: completedCount, 
+            total: totalChunks, 
+            message: `詳細解析中 (${completedCount}/${totalChunks})` 
+          })
+          
+          return data
+        } catch (err) {
+          completedCount++
+          return null
+        }
+      })
+      
       await Promise.all(batchPromises)
     }
     
-    // 結果を統合
-    const allScenes = results.flatMap(r => r.scenes || [])
-    const mergedScenes = mergeScenes([allScenes])
-    const sortedCharacters = allCharacters.sort()
+    // 結果を統合（Mapを使用して厳密な重複排除）
+    const scenesMap = new Map<string, any>()
     
-    // キャラクター出席を再計算
-    const processedScenes = mergedScenes.map((scene: any) => ({
-      scene: scene.scene,
+    for (const result of results) {
+      if (!result || !result.scenes) continue
+      
+      for (const scene of result.scenes) {
+        const episode = scene.episode || 1
+        const sceneNum = scene.scene_number || scene.scene
+        const key = `${episode}-${sceneNum}`
+        
+        if (!scenesMap.has(key) || (scene.content?.length > scenesMap.get(key).content?.length)) {
+          scenesMap.set(key, { ...scene, episode, scene_number: sceneNum })
+        }
+      }
+    }
+    
+    // ソート（話数→シーン番号）
+    const sortedScenes = Array.from(scenesMap.values()).sort((a, b) => {
+      if (a.episode !== b.episode) return a.episode - b.episode
+      return a.scene_number - b.scene_number
+    })
+    
+    // キャラクターリストを構築
+    const allCharacters = new Set<string>()
+    for (const result of results) {
+      if (result.characters) {
+        for (const char of result.characters) {
+          allCharacters.add(char)
+        }
+      }
+    }
+    const sortedCharacters = Array.from(allCharacters).sort()
+    
+    // シーンデータを整形
+    const processedScenes = sortedScenes.map((scene: any) => ({
+      scene: scene.episode > 1 ? `${scene.episode}-${scene.scene_number}` : String(scene.scene_number),
       location: scene.location,
-      timeOfDay: scene.timeOfDay,
+      timeOfDay: scene.timeOfDay || '',
       content: scene.content,
       characters: sortedCharacters.reduce((acc, char) => {
         const { name } = extractCharacterWithAge(char)
@@ -254,7 +262,7 @@ export default function Home() {
     }
 
     setError('')
-    setIsProcessing(true)
+    setProcessingStep('prescan')
 
     try {
       let fullText = ''
@@ -262,14 +270,14 @@ export default function Home() {
       if (inputMode === 'file') {
         if (!file) {
           setError('ファイルを選択してください')
-          setIsProcessing(false)
+          setProcessingStep('idle')
           return
         }
         
         if (fileType === 'txt') {
           fullText = await file.text()
         } else {
-          // PDF/DOCXはBase64で送信（バックエンドで処理）
+          // PDF/DOCXはBase64で送信
           const arrayBuffer = await file.arrayBuffer()
           const base64 = btoa(
             new Uint8Array(arrayBuffer).reduce(
@@ -278,17 +286,13 @@ export default function Home() {
             )
           )
           
-          setProgress({ current: 0, total: 1, message: 'ファイルを解析中...' })
-          
           const payload = fileType === 'pdf' 
             ? { pdfData: base64, password }
             : { docxData: base64, password }
             
           const response = await fetch('/api/generate', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           })
 
@@ -301,31 +305,37 @@ export default function Home() {
           
           if (!data.is_script) {
             setError(data.error_message || '台本形式ではありません')
-            setIsProcessing(false)
+            setProcessingStep('idle')
             return
           }
 
           setMatrixData(data)
-          setIsProcessing(false)
+          setProcessingStep('complete')
           return
         }
       } else {
         if (!scriptText.trim()) {
           setError('台本テキストを入力してください')
-          setIsProcessing(false)
+          setProcessingStep('idle')
           return
         }
         fullText = scriptText
       }
 
-      // テキストの並列処理
-      const result = await processInParallel(fullText)
+      // ステップ1: プリスキャン
+      setProgress({ current: 0, total: 1, message: '1. 登場人物を特定中...' })
+      const { characters, sceneList } = await performPreScan(fullText)
+      
+      // ステップ2: 詳細抽出
+      setProcessingStep('extraction')
+      const result = await performDetailedExtraction(fullText, characters, sceneList)
+      
       setMatrixData(result)
+      setProcessingStep('complete')
       
     } catch (err) {
       setError(err instanceof Error ? err.message : '予期しないエラーが発生しました')
-    } finally {
-      setIsProcessing(false)
+      setProcessingStep('idle')
     }
   }
 
@@ -418,11 +428,14 @@ export default function Home() {
     setScriptText('')
     setMatrixData(null)
     setError('')
+    setProcessingStep('idle')
     setProgress({ current: 0, total: 0, message: '' })
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
+
+  const isProcessing = processingStep !== 'idle' && processingStep !== 'complete'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
