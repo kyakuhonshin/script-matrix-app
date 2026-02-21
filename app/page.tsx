@@ -23,6 +23,17 @@ type FileType = 'pdf' | 'docx' | 'txt'
 const CORRECT_PASSWORD = 'kouban2026'
 const CHUNK_SIZE = 8000
 
+// D/Nを日本語に変換
+function getTimeLabel(code: string): string {
+  const labels: Record<string, string> = {
+    'M': '朝',
+    'D': '昼',
+    'E': '夕方',
+    'N': '夜',
+  }
+  return labels[code] || code
+}
+
 // テキストを分割（単純にチャンク化）
 function splitTextIntoChunks(text: string, chunkSize: number): string[] {
   const chunks: string[] = []
@@ -282,26 +293,6 @@ export default function Home() {
     }
   }
 
-  const handleCellEdit = useCallback((sceneIndex: number, field: keyof SceneData, value: string) => {
-    if (!matrixData) return
-    const newScenes = [...matrixData.scenes]
-    newScenes[sceneIndex] = { ...newScenes[sceneIndex], [field]: value }
-    setMatrixData({ ...matrixData, scenes: newScenes })
-  }, [matrixData])
-
-  const handleCharacterToggle = useCallback((sceneIndex: number, character: string) => {
-    if (!matrixData) return
-    const newScenes = [...matrixData.scenes]
-    newScenes[sceneIndex] = {
-      ...newScenes[sceneIndex],
-      characters: {
-        ...newScenes[sceneIndex].characters,
-        [character]: !newScenes[sceneIndex].characters[character]
-      }
-    }
-    setMatrixData({ ...matrixData, scenes: newScenes })
-  }, [matrixData])
-
   const handleSort = (key: string) => {
     if (!matrixData) return
     
@@ -493,6 +484,10 @@ export default function Home() {
                   >
                     {file ? `✓ ${file.name}` : 'ファイルを選択'}
                   </button>
+                  
+                  <p className="mt-4 text-sm text-slate-500">
+                    ※ PDFは1度に20ページまでにしてください。20ページを超える場合は、話数ごとにPDFを分割してアップロードしてください。
+                  </p>
                 </div>
               )}
 
@@ -632,43 +627,21 @@ export default function Home() {
                   {matrixData.scenes.map((scene, index) => (
                     <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                       <td className="px-3 py-3 border text-center font-bold text-slate-700">
-                        <div
-                          contentEditable
-                          suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'scene', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
-                        >
-                          {scene.scene}
-                        </div>
+                        {scene.scene}
                       </td>
-                      <td className="px-4 py-3 border text-left">
-                        <div
-                          contentEditable
-                          suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'location', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
-                        >
-                          {scene.location}
-                        </div>
+                      <td className="px-4 py-3 border text-left text-slate-700">
+                        {scene.location}
                       </td>
                       <td className="px-2 py-3 border text-center font-medium text-slate-700">
-                        {scene.timeOfDay}
+                        {getTimeLabel(scene.timeOfDay)}
                       </td>
-                      <td className="px-4 py-3 border text-left">
-                        <div
-                          contentEditable
-                          suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'content', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded whitespace-pre-wrap"
-                        >
-                          {scene.content}
-                        </div>
+                      <td className="px-4 py-3 border text-left text-slate-700 whitespace-pre-wrap">
+                        {scene.content}
                       </td>
                       {matrixData.characters.map((char) => (
                         <td
                           key={char}
-                          className="px-1 py-3 border text-center cursor-pointer hover:bg-blue-50"
-                          onClick={() => handleCharacterToggle(index, char)}
+                          className="px-1 py-3 border text-center"
                         >
                           {scene.characters[char] ? (
                             <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-500 text-white text-xs font-bold">
@@ -679,25 +652,11 @@ export default function Home() {
                           )}
                         </td>
                       ))}
-                      <td className="px-4 py-3 border text-left">
-                        <div
-                          contentEditable
-                          suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'props', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
-                        >
-                          {scene.props}
-                        </div>
+                      <td className="px-4 py-3 border text-left text-slate-700">
+                        {scene.props}
                       </td>
-                      <td className="px-4 py-3 border text-left">
-                        <div
-                          contentEditable
-                          suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
-                        >
-                          {scene.notes}
-                        </div>
+                      <td className="px-4 py-3 border text-left text-slate-700">
+                        {scene.notes}
                       </td>
                     </tr>
                   ))}
