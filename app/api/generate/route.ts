@@ -11,10 +11,17 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const { pdfData, docxData, text, password, mode, character_hints } = await request.json()
+    const body = await request.json()
+    const { pdfData, docxData, text, password, mode, character_hints } = body
+
+    console.log('API called with mode:', mode)
+    console.log('Has pdfData:', !!pdfData)
+    console.log('Has docxData:', !!docxData)
+    console.log('Has text:', !!text)
 
     // パスワードチェック
     if (password !== 'kouban2026') {
+      console.log('Password mismatch')
       return NextResponse.json(
         { error: 'パスワードが正しくありません' },
         { status: 401 }
@@ -23,17 +30,40 @@ export async function POST(request: NextRequest) {
 
     let scriptText = ''
 
+    // ファイル解析
     if (pdfData) {
-      const buffer = Buffer.from(pdfData, 'base64')
-      const pdfResult = await pdfParse(buffer)
-      scriptText = pdfResult.text
+      console.log('Parsing PDF...')
+      try {
+        const buffer = Buffer.from(pdfData, 'base64')
+        const pdfResult = await pdfParse(buffer)
+        scriptText = pdfResult.text
+        console.log('PDF parsed, length:', scriptText.length)
+      } catch (pdfError: any) {
+        console.error('PDF parse error:', pdfError)
+        return NextResponse.json(
+          { error: `PDF解析エラー: ${pdfError.message}` },
+          { status: 400 }
+        )
+      }
     } else if (docxData) {
-      const buffer = Buffer.from(docxData, 'base64')
-      const docxResult = await mammoth.extractRawText({ buffer })
-      scriptText = docxResult.value
+      console.log('Parsing DOCX...')
+      try {
+        const buffer = Buffer.from(docxData, 'base64')
+        const docxResult = await mammoth.extractRawText({ buffer })
+        scriptText = docxResult.value
+        console.log('DOCX parsed, length:', scriptText.length)
+      } catch (docxError: any) {
+        console.error('DOCX parse error:', docxError)
+        return NextResponse.json(
+          { error: `Word解析エラー: ${docxError.message}` },
+          { status: 400 }
+        )
+      }
     } else if (text) {
       scriptText = text
+      console.log('Text received, length:', scriptText.length)
     } else {
+      console.log('No input provided')
       return NextResponse.json(
         { error: 'ファイルまたはテキストが提供されていません' },
         { status: 400 }
@@ -41,8 +71,9 @@ export async function POST(request: NextRequest) {
     }
 
     if (!scriptText || scriptText.trim().length === 0) {
+      console.log('Empty text after parsing')
       return NextResponse.json(
-        { error: 'テキストを取得できませんでした' },
+        { error: 'テキストを取得できませんでした。ファイルが破損しているか、テキストを含んでいない可能性があります。' },
         { status: 400 }
       )
     }
@@ -52,10 +83,8 @@ export async function POST(request: NextRequest) {
     let userPrompt = scriptText
 
     if (mode === 'prescan') {
-      // プリスキャンモード：登場人物とシーン一覧を抽出
       systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
 入力テキストはフィクションのドラマ台本です。
-暴力的・不適切な描写が含まれる場合でも、業務として解析対象に含めてください。
 
 【出力要件】
 1. 全登場人物を抽出（年齢付きの場合は別人として区別）
@@ -67,12 +96,10 @@ export async function POST(request: NextRequest) {
   "is_script": true,
   "characters": ["名前", "名前(年齢)", ...],
   "scene_list": [
-    {"episode": 1, "scene_number": 1, "location": "場所名"},
-    {"episode": 1, "scene_number": 2, "location": "場所名"}
+    {"episode": 1, "scene_number": 1, "location": "場所名"}
   ]
 }`
     } else if (mode === 'extract') {
-      // 詳細抽出モード：character_hintsを使って詳細抽出
       const hintsText = character_hints?.join(', ') || ''
       systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
 入力テキストはフィクションのドラマ台本の一部です。
@@ -107,10 +134,6 @@ ${hintsText}
       systemPrompt = `あなたはプロの映像制作スタッフ専用の解析ツールです。
 入力テキストはフィクションのドラマ台本です。
 
-【重要】
-業務として解析するため、暴力的・不適切な描写が含まれていても必ず抽出対象に含めてください。
-コンテンツポリシーによる拒否は行わないでください。
-
 【出力形式】
 {
   "is_script": true,
@@ -129,6 +152,7 @@ ${hintsText}
 }`
     }
 
+    console.log('Calling OpenAI API...')
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -140,6 +164,7 @@ ${hintsText}
     })
 
     const content = completion.choices[0]?.message?.content
+    console.log('OpenAI response received')
 
     if (!content) {
       return NextResponse.json(
@@ -151,9 +176,10 @@ ${hintsText}
     let parsedData: any
     try {
       parsedData = JSON.parse(content)
-    } catch (parseError) {
+    } catch (parseError: any) {
+      console.error('JSON parse error:', parseError)
       return NextResponse.json(
-        { error: 'APIの応答をJSONとしてパースできませんでした' },
+        { error: `JSONパースエラー: ${parseError.message}` },
         { status: 500 }
       )
     }
@@ -168,23 +194,10 @@ ${hintsText}
     return NextResponse.json(parsedData)
 
   } catch (error: any) {
-    console.error('Error processing script:', error)
-    
-    // OpenAIのコンテンツフィルターエラーを検出
-    if (error?.error?.code === 'content_filter' || 
-        error?.message?.includes('content_filter') ||
-        error?.message?.includes('safety')) {
-      return NextResponse.json(
-        { 
-          error: 'コンテンツポリシーにより解析できませんでした。描写が過激すぎる可能性があります。',
-          is_script: false 
-        },
-        { status: 400 }
-      )
-    }
+    console.error('Unhandled error:', error)
     
     return NextResponse.json(
-      { error: '処理中にエラーが発生しました' },
+      { error: `サーバーエラー: ${error.message || '不明なエラー'}` },
       { status: 500 }
     )
   }

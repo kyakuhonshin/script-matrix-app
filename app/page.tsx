@@ -24,6 +24,7 @@ type ProcessingStep = 'idle' | 'prescan' | 'extraction' | 'complete'
 const CORRECT_PASSWORD = 'kouban2026'
 const CHUNK_SIZE = 6000
 const OVERLAP_SIZE = 500
+const MAX_RETRIES = 3
 
 // テキストをオーバーラップ付きで分割
 function splitTextIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
@@ -60,6 +61,7 @@ export default function Home() {
   const [processingStep, setProcessingStep] = useState<ProcessingStep>('idle')
   const [progress, setProgress] = useState({ current: 0, total: 0, message: '' })
   const [error, setError] = useState<string>('')
+  const [showSplitAdvice, setShowSplitAdvice] = useState(false)
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -86,6 +88,7 @@ export default function Home() {
         (fileType === 'docx' && selectedFile.name.endsWith('.docx'))) {
       setFile(selectedFile)
       setError('')
+      setShowSplitAdvice(false)
     } else {
       setError('適切なファイル形式を選択してください')
       setFile(null)
@@ -105,13 +108,67 @@ export default function Home() {
     return true
   }
 
+  // 単一チャンクの処理（リトライ機能付き）
+  const processChunkWithRetry = async (
+    chunk: string, 
+    index: number, 
+    characterHints: string[],
+    totalChunks: number
+  ): Promise<any> => {
+    let lastError = ''
+    
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            text: chunk, 
+            password,
+            mode: 'extract',
+            character_hints: characterHints,
+            part: index
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          lastError = errorText
+          
+          if (attempt < MAX_RETRIES) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+            continue
+          }
+          
+          throw new Error(`セクション ${index + 1} の処理に失敗`)
+        }
+
+        const data = await response.json()
+        
+        if (!data.is_script) {
+          throw new Error(data.error_message || '台本形式ではありません')
+        }
+
+        return data
+      } catch (err: any) {
+        if (attempt >= MAX_RETRIES) {
+          throw err
+        }
+        lastError = err.message
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+      }
+    }
+    
+    throw new Error(lastError || `セクション ${index + 1} の処理に失敗しました`)
+  }
+
   // プリスキャン：登場人物とシーン一覧を取得
   const performPreScan = async (text: string): Promise<{ characters: string[], sceneList: { episode: number, scene_number: number, location: string }[] }> => {
     const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        text: text.slice(0, 10000), // 先頭1万文字でプリスキャン
+        text: text.slice(0, 10000),
         password,
         mode: 'prescan'
       }),
@@ -134,7 +191,7 @@ export default function Home() {
     }
   }
 
-  // 並列詳細抽出
+  // 並列詳細抽出（エラーリカバリー付き）
   const performDetailedExtraction = async (
     text: string, 
     characterHints: string[],
@@ -146,56 +203,38 @@ export default function Home() {
     setProgress({ current: 0, total: totalChunks, message: `詳細解析中 (0/${totalChunks})` })
     
     let completedCount = 0
+    let failedCount = 0
     const results: any[] = []
     
     // 3件ずつ並列処理
     for (let i = 0; i < chunks.length; i += 3) {
       const batch = chunks.slice(i, i + 3)
       const batchPromises = batch.map(async (chunk, idx) => {
+        const chunkIndex = i + idx
         try {
-          const response = await fetch('/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              text: chunk, 
-              password,
-              mode: 'extract',
-              character_hints: characterHints,
-              part: i + idx
-            }),
-          })
-
-          if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`セクション ${i + idx + 1} の処理に失敗: ${errorText}`)
-          }
-
-          const data = await response.json()
-          
-          if (!data.is_script) {
-            return null
-          }
-
+          const data = await processChunkWithRetry(chunk, chunkIndex, characterHints, totalChunks)
           results.push(data)
-          
           completedCount++
-          setProgress({ 
-            current: completedCount, 
-            total: totalChunks, 
-            message: `詳細解析中 (${completedCount}/${totalChunks})` 
-          })
-          
-          return data
-        } catch (err) {
-          completedCount++
-          return null
+        } catch (err: any) {
+          console.error(`Chunk ${chunkIndex + 1} failed:`, err)
+          failedCount++
         }
+        
+        setProgress({ 
+          current: completedCount + failedCount, 
+          total: totalChunks, 
+          message: `詳細解析中 (${completedCount + failedCount}/${totalChunks})${failedCount > 0 ? ` - ${failedCount}件失敗` : ''}` 
+        })
       })
       
       await Promise.all(batchPromises)
     }
     
-    // 結果を統合（Mapを使用して厳密な重複排除）
+    if (results.length === 0) {
+      throw new Error('全てのセクションの処理に失敗しました。')
+    }
+    
+    // 結果を統合
     const scenesMap = new Map<string, any>()
     
     for (const result of results) {
@@ -212,13 +251,11 @@ export default function Home() {
       }
     }
     
-    // ソート（話数→シーン番号）
     const sortedScenes = Array.from(scenesMap.values()).sort((a, b) => {
       if (a.episode !== b.episode) return a.episode - b.episode
       return a.scene_number - b.scene_number
     })
     
-    // キャラクターリストを構築
     const allCharacters = new Set<string>()
     for (const result of results) {
       if (result.characters) {
@@ -229,7 +266,6 @@ export default function Home() {
     }
     const sortedCharacters = Array.from(allCharacters).sort()
     
-    // シーンデータを整形
     const processedScenes = sortedScenes.map((scene: any) => ({
       scene: scene.episode > 1 ? `${scene.episode}-${scene.scene_number}` : String(scene.scene_number),
       location: scene.location,
@@ -262,6 +298,7 @@ export default function Home() {
     }
 
     setError('')
+    setShowSplitAdvice(false)
     setProcessingStep('prescan')
 
     try {
@@ -277,7 +314,6 @@ export default function Home() {
         if (fileType === 'txt') {
           fullText = await file.text()
         } else {
-          // PDF/DOCXはBase64で送信
           const arrayBuffer = await file.arrayBuffer()
           const base64 = btoa(
             new Uint8Array(arrayBuffer).reduce(
@@ -289,7 +325,7 @@ export default function Home() {
           const payload = fileType === 'pdf' 
             ? { pdfData: base64, password }
             : { docxData: base64, password }
-            
+          
           const response = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -297,8 +333,20 @@ export default function Home() {
           })
 
           if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`ファイル解析エラー: ${errorText}`)
+            let errorMessage = `ファイル解析エラー: ${response.status}`
+            try {
+              const errorData = await response.json()
+              errorMessage = errorData.error || errorMessage
+            } catch {
+              const errorText = await response.text()
+              errorMessage = errorText || errorMessage
+            }
+            
+            if (file.size > 1024 * 1024) {
+              setShowSplitAdvice(true)
+            }
+            
+            throw new Error(errorMessage)
           }
 
           const data = await response.json()
@@ -322,19 +370,18 @@ export default function Home() {
         fullText = scriptText
       }
 
-      // ステップ1: プリスキャン
       setProgress({ current: 0, total: 1, message: '1. 登場人物を特定中...' })
       const { characters, sceneList } = await performPreScan(fullText)
       
-      // ステップ2: 詳細抽出
       setProcessingStep('extraction')
       const result = await performDetailedExtraction(fullText, characters, sceneList)
       
       setMatrixData(result)
       setProcessingStep('complete')
       
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '予期しないエラーが発生しました')
+    } catch (err: any) {
+      console.error('Processing error:', err)
+      setError(err.message || '予期しないエラーが発生しました')
       setProcessingStep('idle')
     }
   }
@@ -428,6 +475,7 @@ export default function Home() {
     setScriptText('')
     setMatrixData(null)
     setError('')
+    setShowSplitAdvice(false)
     setProcessingStep('idle')
     setProgress({ current: 0, total: 0, message: '' })
     if (fileInputRef.current) {
@@ -552,6 +600,10 @@ export default function Home() {
                   >
                     {file ? `✓ ${file.name}` : 'ファイルを選択'}
                   </button>
+                  
+                  <p className="mt-4 text-sm text-slate-500">
+                    ※ 長い台本は読み込めない可能性があります。PDFの場合、話数ごとに分割して読み込むと成功する確率が上がります。
+                  </p>
                 </div>
               )}
 
@@ -578,6 +630,11 @@ export default function Home() {
               {error && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
                   <p className="text-red-700 font-medium">⚠ {error}</p>
+                  {showSplitAdvice && (
+                    <p className="mt-2 text-red-600 text-sm">
+                      ファイルサイズが大きいため、話数ごとにPDFを分割してアップロードしてください。
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -745,30 +802,4 @@ export default function Home() {
                         <div
                           contentEditable
                           suppressContentEditableWarning
-                          onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-1 py-1 rounded"
-                        >
-                          {scene.notes}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Ad Space Bottom */}
-      <div className="w-full bg-gray-100 border-t border-gray-200 mt-12">
-        <div className="max-w-4xl mx-auto py-4 px-4">
-          <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg py-8 text-center">
-            <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
-            <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
+                          onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent
