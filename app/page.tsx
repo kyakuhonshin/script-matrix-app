@@ -84,6 +84,10 @@ export default function Home() {
     }
   }
 
+  const handleFileSelectClick = () => {
+    fileInputRef.current?.click()
+  }
+
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
   const updateLoadingStep = async (step: LoadingStep) => {
@@ -93,7 +97,7 @@ export default function Home() {
 
   const validatePassword = () => {
     if (password !== CORRECT_PASSWORD) {
-      setPasswordError('合言葉が正しくありません')
+      setPasswordError('パスワードが正しくありません')
       return false
     }
     setPasswordError('')
@@ -263,16 +267,6 @@ export default function Home() {
     URL.revokeObjectURL(url)
   }
 
-  const getTimeLabel = (time: string) => {
-    const labels: Record<string, string> = {
-      M: '朝',
-      D: '昼',
-      E: '夕方',
-      N: '夜',
-    }
-    return labels[time] || ''
-  }
-
   const handleReset = () => {
     setFile(null)
     setScriptText('')
@@ -290,31 +284,33 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Ad Space Top */}
-      <div className="w-full bg-gray-200 border-b border-gray-300">
-        <div className="max-w-5xl mx-auto py-4 px-4 text-center">
-          <div className="bg-gray-300 border-2 border-dashed border-gray-400 rounded-lg py-6">
+      <div className="w-full bg-gray-100 border-b border-gray-200">
+        <div className="max-w-4xl mx-auto py-4 px-4">
+          <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg py-8 text-center">
             <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
             <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
           </div>
         </div>
       </div>
 
-      <main className="max-w-5xl mx-auto px-4 py-12">
+      <main className="max-w-4xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-slate-800 mb-3">
-            台本香盤表ジェネレーター
+          <h1 className="text-4xl font-bold text-slate-800 mb-4">
+            香盤表ジェネレーター
           </h1>
-          <p className="text-slate-600 text-lg">
-            PDF・Word・テキストの台本から香盤表を自動生成
+          <p className="text-slate-600 text-lg leading-relaxed max-w-2xl mx-auto">
+            台本（PDF/Word/テキスト）をAIが解析し、撮影に必要な香盤表を自動生成します。<br />
+            登場人物の出演シーン、シーン内容の要約、小道具の抽出を瞬時に行い、制作現場の事務作業を大幅に短縮します。<br />
+            生成された表はCSV形式でダウンロード可能です。
           </p>
         </div>
 
         {!matrixData ? (
-          <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
+          <div className="bg-white rounded-2xl shadow-lg p-8 mb-8">
             {/* Password Input */}
-            <div className="mb-8 p-6 bg-amber-50 border border-amber-200 rounded-xl">
-              <label className="block text-sm font-semibold text-amber-800 mb-2">
-                合言葉を入力してください
+            <div className="mb-8">
+              <label className="block text-sm font-semibold text-slate-700 mb-2">
+                パスワード
               </label>
               <input
                 type="password"
@@ -323,52 +319,49 @@ export default function Home() {
                   setPassword(e.target.value)
                   setPasswordError('')
                 }}
-                placeholder="合言葉"
-                className="w-full px-4 py-3 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                placeholder="パスワードを入力"
+                className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               {passwordError && (
                 <p className="mt-2 text-red-600 text-sm font-medium">{passwordError}</p>
               )}
             </div>
 
-            <form onSubmit={handleSubmit}>
-              {/* Input Mode Toggle */}
-              <div className="mb-6">
-                <label className="block text-sm font-semibold text-slate-700 mb-3">
-                  入力方法を選択
-                </label>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setInputMode('file')}
-                    className={`px-6 py-3 rounded-xl font-medium transition-all ${
-                      inputMode === 'file'
-                        ? 'bg-blue-600 text-white shadow-lg'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    ファイルアップロード
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInputMode('text')}
-                    className={`px-6 py-3 rounded-xl font-medium transition-all ${
-                      inputMode === 'text'
-                        ? 'bg-blue-600 text-white shadow-lg'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    テキスト直接入力
-                  </button>
-                </div>
+            {/* Input Mode Tabs */}
+            <div className="mb-8">
+              <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setInputMode('file')}
+                  className={`flex-1 py-3 px-6 rounded-lg font-medium transition-all ${
+                    inputMode === 'file'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-800'
+                  }`}
+                >
+                  ファイルから
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInputMode('text')}
+                  className={`flex-1 py-3 px-6 rounded-lg font-medium transition-all ${
+                    inputMode === 'text'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-800'
+                  }`}
+                >
+                  テキスト入力
+                </button>
               </div>
+            </div>
 
+            <form onSubmit={handleSubmit}>
               {inputMode === 'file' && (
-                <div className="mb-6">
-                  <label className="block text-sm font-semibold text-slate-700 mb-3">
-                    ファイル形式
+                <div className="mb-8 p-6 bg-gray-50 border border-gray-200 rounded-xl">
+                  <label className="block text-sm font-semibold text-slate-700 mb-4">
+                    ファイル形式を選択する
                   </label>
-                  <div className="flex gap-2 mb-4">
+                  <div className="flex gap-3 mb-6">
                     {(['pdf', 'docx', 'txt'] as FileType[]).map((type) => (
                       <button
                         key={type}
@@ -377,10 +370,10 @@ export default function Home() {
                           setFileType(type)
                           setFile(null)
                         }}
-                        className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                        className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
                           fileType === type
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            ? 'bg-blue-600 text-white shadow-md'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
                         }`}
                       >
                         {type === 'pdf' && 'PDF'}
@@ -390,40 +383,29 @@ export default function Home() {
                     ))}
                   </div>
 
-                  <label
-                    htmlFor="file-input"
-                    className="block text-sm font-semibold text-slate-700 mb-2"
-                  >
-                    {getFileTypeLabel()}ファイルを選択
-                  </label>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    id="file-input"
                     accept={getFileAccept()}
                     onChange={handleFileChange}
-                    className="block w-full text-sm text-slate-500
-                      file:mr-4 file:py-3 file:px-6
-                      file:rounded-xl file:border-0
-                      file:text-sm file:font-semibold
-                      file:bg-blue-50 file:text-blue-700
-                      hover:file:bg-blue-100
-                      border border-slate-300 rounded-xl p-3
-                      focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="hidden"
                   />
-                  {file && (
-                    <p className="mt-3 text-sm text-green-600 font-medium">
-                      ✓ {file.name}
-                    </p>
-                  )}
+                  
+                  <button
+                    type="button"
+                    onClick={handleFileSelectClick}
+                    className="w-full py-4 px-6 bg-white border-2 border-dashed border-blue-400 rounded-xl text-blue-600 font-semibold hover:bg-blue-50 hover:border-blue-500 transition-all"
+                  >
+                    {file ? `✓ ${file.name}` : `${getFileTypeLabel()}ファイルを選択`}
+                  </button>
                 </div>
               )}
 
               {inputMode === 'text' && (
-                <div className="mb-6">
+                <div className="mb-8">
                   <label
                     htmlFor="script-text"
-                    className="block text-sm font-semibold text-slate-700 mb-2"
+                    className="block text-sm font-semibold text-slate-700 mb-3"
                   >
                     台本テキスト
                   </label>
@@ -451,7 +433,7 @@ export default function Home() {
                 className={`w-full py-4 px-6 rounded-xl font-bold text-lg text-white transition-all
                   ${isLoading
                     ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl'
+                    : 'bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl'
                   }`}
               >
                 {isLoading ? getLoadingText(loadingStep) : '香盤表を生成'}
@@ -459,7 +441,7 @@ export default function Home() {
             </form>
           </div>
         ) : (
-          <div className="mb-6 flex gap-4 justify-center">
+          <div className="mb-8 flex gap-4 justify-center">
             <button
               onClick={handleReset}
               className="bg-slate-600 hover:bg-slate-700 text-white py-3 px-6 rounded-xl font-semibold shadow-lg transition-all"
@@ -476,12 +458,12 @@ export default function Home() {
         )}
 
         {isLoading && (
-          <div className="text-center py-12 bg-white rounded-2xl shadow-xl">
+          <div className="text-center py-12 bg-white rounded-2xl shadow-lg mb-8">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mb-4"></div>
             <p className="text-slate-600 font-medium text-lg">{getLoadingText(loadingStep)}</p>
             <div className="mt-6 w-72 mx-auto bg-slate-200 rounded-full h-3">
               <div 
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 h-3 rounded-full transition-all duration-500"
+                className="bg-blue-600 h-3 rounded-full transition-all duration-500"
                 style={{ 
                   width: loadingStep === 'uploading' ? '20%' : 
                          loadingStep === 'parsing' ? '40%' : 
@@ -494,8 +476,8 @@ export default function Home() {
         )}
 
         {matrixData && (
-          <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-            <div className="p-6 bg-gradient-to-r from-slate-100 to-slate-50 border-b flex justify-between items-center">
+          <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
+            <div className="p-6 bg-slate-50 border-b flex justify-between items-center">
               <h2 className="text-2xl font-bold text-slate-800">香盤表</h2>
               <p className="text-sm text-slate-600 font-medium">
                 全{matrixData.scenes.length}シーン · {matrixData.characters.length}キャラクター
@@ -504,28 +486,28 @@ export default function Home() {
             <div className="overflow-x-auto">
               <table className="w-full border-collapse">
                 <thead>
-                  <tr className="bg-slate-50">
+                  <tr className="bg-slate-100">
                     <th 
                       onClick={() => handleSort('scene')}
-                      className="px-4 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none"
+                      className="px-4 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none"
                     >
                       シーン {sortConfig?.key === 'scene' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     <th 
                       onClick={() => handleSort('location')}
-                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none"
+                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none"
                     >
                       場所 {sortConfig?.key === 'location' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     <th 
                       onClick={() => handleSort('timeOfDay')}
-                      className="px-2 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none w-16"
+                      className="px-2 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none w-16"
                     >
                       D/N {sortConfig?.key === 'timeOfDay' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
                     <th 
                       onClick={() => handleSort('content')}
-                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-100 select-none min-w-[200px]"
+                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none min-w-[200px]"
                     >
                       内容 {sortConfig?.key === 'content' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
                     </th>
@@ -555,7 +537,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'scene', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[40px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
                         >
                           {scene.scene}
                         </div>
@@ -565,30 +547,20 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'location', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[80px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
                         >
                           {scene.location}
                         </div>
                       </td>
-                      <td className="px-2 py-3 border text-center">
-                        <select
-                          value={scene.timeOfDay}
-                          onChange={(e) => handleCellEdit(index, 'timeOfDay', e.target.value)}
-                          className="w-full text-center bg-transparent outline-none focus:bg-yellow-50 rounded py-1"
-                        >
-                          <option value=""></option>
-                          <option value="M">朝</option>
-                          <option value="D">昼</option>
-                          <option value="E">夕方</option>
-                          <option value="N">夜</option>
-                        </select>
+                      <td className="px-2 py-3 border text-center font-medium text-slate-700">
+                        {scene.timeOfDay}
                       </td>
                       <td className="px-4 py-3 border text-left">
                         <div
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'content', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[200px] whitespace-pre-wrap"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded whitespace-pre-wrap"
                         >
                           {scene.content}
                         </div>
@@ -613,7 +585,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'props', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[100px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
                         >
                           {scene.props}
                         </div>
@@ -623,7 +595,7 @@ export default function Home() {
                           contentEditable
                           suppressContentEditableWarning
                           onBlur={(e) => handleCellEdit(index, 'notes', e.currentTarget.textContent || '')}
-                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded min-w-[100px]"
+                          className="outline-none focus:bg-yellow-50 px-2 py-1 rounded"
                         >
                           {scene.notes}
                         </div>
@@ -638,9 +610,9 @@ export default function Home() {
       </main>
 
       {/* Ad Space Bottom */}
-      <div className="w-full bg-gray-200 border-t border-gray-300 mt-12">
-        <div className="max-w-5xl mx-auto py-4 px-4 text-center">
-          <div className="bg-gray-300 border-2 border-dashed border-gray-400 rounded-lg py-6">
+      <div className="w-full bg-gray-100 border-t border-gray-200 mt-12">
+        <div className="max-w-4xl mx-auto py-4 px-4">
+          <div className="bg-gray-200 border-2 border-dashed border-gray-400 rounded-lg py-8 text-center">
             <p className="text-gray-500 text-sm font-medium">広告枠（Ad Space）</p>
             <p className="text-gray-400 text-xs mt-1">Google AdSense 等を設置予定</p>
           </div>
