@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef } from 'react'
 
 interface SceneData {
   scene: string
@@ -17,24 +17,20 @@ interface MatrixData {
   scenes: SceneData[]
 }
 
-type InputMode = 'file' | 'text'
 type FileType = 'pdf' | 'docx' | 'txt'
 
-const CORRECT_PASSWORD = 'kouban2026'
 const CHUNK_SIZE = 8000
 
 // D/Nを日本語に変換
 function getTimeLabel(code: string): string {
   const labels: Record<string, string> = {
-    'M': '朝',
-    'D': '昼',
-    'E': '夕方',
     'N': '夜',
+    'D': '昼',
   }
   return labels[code] || code
 }
 
-// テキストを分割（単純にチャンク化）
+// テキストを分割
 function splitTextIntoChunks(text: string, chunkSize: number): string[] {
   const chunks: string[] = []
   let position = 0
@@ -49,17 +45,12 @@ function splitTextIntoChunks(text: string, chunkSize: number): string[] {
 }
 
 export default function Home() {
-  const [inputMode, setInputMode] = useState<InputMode>('file')
   const [fileType, setFileType] = useState<FileType>('pdf')
   const [file, setFile] = useState<File | null>(null)
-  const [scriptText, setScriptText] = useState('')
-  const [password, setPassword] = useState('')
-  const [passwordError, setPasswordError] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [error, setError] = useState<string>('')
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const getFileAccept = () => {
@@ -94,16 +85,7 @@ export default function Home() {
     fileInputRef.current?.click()
   }
 
-  const validatePassword = () => {
-    if (password !== CORRECT_PASSWORD) {
-      setPasswordError('パスワードが正しくありません')
-      return false
-    }
-    setPasswordError('')
-    return true
-  }
-
-  // 直列処理（シーケンシャル）- タイムアウト回避のため
+  // 直列処理
   const processTextSequentially = async (fullText: string): Promise<MatrixData> => {
     const chunks = splitTextIntoChunks(fullText, CHUNK_SIZE)
     const totalChunks = chunks.length
@@ -112,7 +94,6 @@ export default function Home() {
     
     const allScenes: any[] = []
     
-    // 直列処理：1つずつ順番に処理
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]
       
@@ -120,10 +101,7 @@ export default function Home() {
         const response = await fetch('/api/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            text: chunk, 
-            password
-          }),
+          body: JSON.stringify({ text: chunk }),
         })
 
         if (!response.ok) {
@@ -137,21 +115,22 @@ export default function Home() {
           throw new Error(data.error_message || '台本形式ではありません')
         }
 
-        // シーンを追加
         if (data.scenes && Array.isArray(data.scenes)) {
           allScenes.push(...data.scenes)
         }
         
-        // 進捗更新
         setProgress({ current: i + 1, total: totalChunks })
         
       } catch (err: any) {
         console.error(`Chunk ${i + 1} failed:`, err)
-        // エラーが出ても続行（部分的な結果を返す）
       }
     }
     
-    // すべてのシーンからユニークな登場人物を収集
+    if (allScenes.length === 0) {
+      throw new Error('処理に失敗しました')
+    }
+    
+    // 登場人物を収集
     const allCharacters = new Set<string>()
     for (const scene of allScenes) {
       if (scene.characters && Array.isArray(scene.characters)) {
@@ -163,10 +142,12 @@ export default function Home() {
     const sortedCharacters = Array.from(allCharacters).sort()
     
     // シーンデータを整形
-    const processedScenes = allScenes.map((scene: any, index: number) => ({
-      scene: scene.scene_number || scene.scene || String(index + 1),
+    const processedScenes = allScenes.map((scene: any) => ({
+      scene: scene.episode && scene.episode !== '1' 
+        ? `${scene.episode}-${scene.scene}` 
+        : scene.scene,
       location: scene.location || '',
-      timeOfDay: scene.dn || scene.timeOfDay || '',
+      timeOfDay: scene.dn || '',
       content: scene.content || '',
       characters: sortedCharacters.reduce((acc, char) => {
         const isPresent = scene.characters?.includes(char) || false
@@ -185,105 +166,95 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!validatePassword()) {
-      return
-    }
-
     setError('')
     setIsProcessing(true)
 
     try {
-      // ファイルアップロードの場合は単純に1回のAPIコール
-      if (inputMode === 'file') {
-        if (!file) {
-          setError('ファイルを選択してください')
-          setIsProcessing(false)
-          return
-        }
-        
-        const arrayBuffer = await file.arrayBuffer()
-        const base64 = btoa(
-          new Uint8Array(arrayBuffer).reduce(
-            (data, byte) => data + String.fromCharCode(byte),
-            ''
-          )
+      if (!file) {
+        setError('ファイルを選択してください')
+        setIsProcessing(false)
+        return
+      }
+      
+      // TXTファイルの場合はチャンク処理
+      if (fileType === 'txt') {
+        const text = await file.text()
+        const result = await processTextSequentially(text)
+        setMatrixData(result)
+        setIsProcessing(false)
+        return
+      }
+      
+      // PDF/DOCXはそのまま送信
+      const arrayBuffer = await file.arrayBuffer()
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce(
+          (data, byte) => data + String.fromCharCode(byte),
+          ''
         )
-        
-        const payload = fileType === 'pdf' 
-          ? { pdfData: base64, password }
-          : { docxData: base64, password }
-        
-        const response = await fetch('/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
+      )
+      
+      const payload = fileType === 'pdf' 
+        ? { pdfData: base64 }
+        : { docxData: base64 }
+      
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
 
-        if (!response.ok) {
-          const errorText = await response.text()
-          throw new Error(`ファイル解析エラー: ${errorText}`)
-        }
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ファイル解析エラー: ${errorText}`)
+      }
 
-        const data = await response.json()
-        
-        if (!data.is_script) {
-          setError(data.error_message || '台本形式ではありません')
-          setIsProcessing(false)
-          return
-        }
+      const data = await response.json()
+      
+      if (!data.is_script) {
+        setError(data.error_message || '台本形式ではありません')
+        setIsProcessing(false)
+        return
+      }
 
-        // 単一レスポンスから登場人物を収集
-        const allScenes = data.scenes || []
-        const allCharacters = new Set<string>()
-        for (const scene of allScenes) {
-          if (scene.characters && Array.isArray(scene.characters)) {
-            for (const char of scene.characters) {
-              allCharacters.add(char)
-            }
+      // 登場人物を収集
+      const allScenes = data.scenes || []
+      const allCharacters = new Set<string>()
+      for (const scene of allScenes) {
+        if (scene.characters && Array.isArray(scene.characters)) {
+          for (const char of scene.characters) {
+            allCharacters.add(char)
           }
         }
-        const sortedCharacters = Array.from(allCharacters).sort()
-        
-        const processedScenes = allScenes.map((scene: any, index: number) => ({
-          scene: scene.scene_number || scene.scene || String(index + 1),
-          location: scene.location || '',
-          timeOfDay: scene.dn || scene.timeOfDay || '',
-          content: scene.content || '',
-          characters: sortedCharacters.reduce((acc, char) => {
-            const isPresent = scene.characters?.includes(char) || false
-            acc[char] = isPresent
-            return acc
-          }, {} as Record<string, boolean>),
-          props: Array.isArray(scene.props) ? scene.props.join(', ') : (scene.props || ''),
-          notes: scene.notes || ''
-        }))
+      }
+      const sortedCharacters = Array.from(allCharacters).sort()
+      
+      const processedScenes = allScenes.map((scene: any) => ({
+        scene: scene.episode && scene.episode !== '1' 
+          ? `${scene.episode}-${scene.scene}` 
+          : scene.scene,
+        location: scene.location || '',
+        timeOfDay: scene.dn || '',
+        content: scene.content || '',
+        characters: sortedCharacters.reduce((acc, char) => {
+          const isPresent = scene.characters?.includes(char) || false
+          acc[char] = isPresent
+          return acc
+        }, {} as Record<string, boolean>),
+        props: Array.isArray(scene.props) ? scene.props.join(', ') : (scene.props || ''),
+        notes: scene.notes || ''
+      }))
 
-        setMatrixData({
-          characters: sortedCharacters,
-          scenes: processedScenes
-        })
-        setIsProcessing(false)
-        return
-      }
-      
-      // テキスト入力の場合
-      if (!scriptText.trim()) {
-        setError('台本テキストを入力してください')
-        setIsProcessing(false)
-        return
-      }
-      
-      // 長いテキストは直列処理（タイムアウト回避）
-      const result = await processTextSequentially(scriptText)
-      setMatrixData(result)
+      setMatrixData({
+        characters: sortedCharacters,
+        scenes: processedScenes
+      })
       
     } catch (err: any) {
       console.error('Processing error:', err)
       const errorMsg = err.message || '予期しないエラーが発生しました'
       setError(errorMsg)
       
-      // タイムアウトエラーの場合はアドバイスを表示
       if (errorMsg.includes('TIMEOUT') || errorMsg.includes('FUNCTION_INVOCATION_TIMEOUT') || 
           errorMsg.includes('504') || errorMsg.includes('60秒')) {
         setError(errorMsg + '\n\nデータ量が多いため処理がタイムアウトしました。PDFを話数ごとに分割してアップロードすると解決する可能性があります。')
@@ -291,39 +262,6 @@ export default function Home() {
     } finally {
       setIsProcessing(false)
     }
-  }
-
-  const handleSort = (key: string) => {
-    if (!matrixData) return
-    
-    let direction: 'asc' | 'desc' = 'asc'
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc'
-    }
-    setSortConfig({ key, direction })
-
-    const sortedScenes = [...matrixData.scenes].sort((a, b) => {
-      let aValue: string | number
-      let bValue: string | number
-
-      if (key === 'scene') {
-        aValue = a.scene
-        bValue = b.scene
-      } else if (key === 'timeOfDay') {
-        const order = { 'M': 0, 'D': 1, 'E': 2, 'N': 3, '': 4 }
-        aValue = order[a.timeOfDay as keyof typeof order] ?? 5
-        bValue = order[b.timeOfDay as keyof typeof order] ?? 5
-      } else {
-        aValue = (a[key as keyof SceneData] as string)?.toLowerCase() || ''
-        bValue = (b[key as keyof SceneData] as string)?.toLowerCase() || ''
-      }
-
-      if (aValue < bValue) return direction === 'asc' ? -1 : 1
-      if (aValue > bValue) return direction === 'asc' ? 1 : -1
-      return 0
-    })
-
-    setMatrixData({ ...matrixData, scenes: sortedScenes })
   }
 
   const downloadCSV = () => {
@@ -334,7 +272,7 @@ export default function Home() {
     const rows = matrixData.scenes.map(scene => [
       scene.scene,
       scene.location,
-      scene.timeOfDay,
+      getTimeLabel(scene.timeOfDay),
       scene.content,
       ...matrixData.characters.map(char => scene.characters[char] ? '○' : ''),
       scene.props,
@@ -359,7 +297,6 @@ export default function Home() {
 
   const handleReset = () => {
     setFile(null)
-    setScriptText('')
     setMatrixData(null)
     setError('')
     setIsProcessing(false)
@@ -384,132 +321,61 @@ export default function Home() {
       <main className="max-w-5xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-slate-800 mb-4">
-            香盤表ジェネレーター
+            香盤表ジェネレーター v2.01
           </h1>
-          <p className="text-slate-600 text-lg max-w-2xl mx-auto">
-            台本（PDF/Word/テキスト）を解析し、香盤表を自動生成。全シーンを漏らさず抽出します。
+          <p className="text-slate-600 text-lg max-w-2xl mx-auto whitespace-pre-line">
+            アップロードするファイル形式を選んで、ファイルを選択してアップロードしてください。
+            {'\n'}生成には1分程度の時間がかかります。
+            {'\n'}生成後はcsvでダウンロードできるので、スプレッドシートに貼り付けてください。
+            {'\n'}PDFは1度に20ページまでにしてください。20ページを超える場合は、PDFを分割してアップロードしてください。
           </p>
         </div>
 
         {!matrixData ? (
           <div className="bg-white rounded-2xl shadow-lg p-8 mb-8">
-            {/* Password Input */}
-            <div className="mb-8">
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
-                パスワード
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value)
-                  setPasswordError('')
-                }}
-                placeholder="パスワードを入力"
-                className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              {passwordError && (
-                <p className="mt-2 text-red-600 text-sm font-medium">{passwordError}</p>
-              )}
-            </div>
+            <form onSubmit={handleSubmit}>
+              <div className="mb-8 p-6 bg-gray-50 border border-gray-200 rounded-xl">
+                <label className="block text-sm font-semibold text-slate-700 mb-4">
+                  ファイル形式を選択する
+                </label>
+                <div className="flex gap-3 mb-6">
+                  {(['pdf', 'docx', 'txt'] as FileType[]).map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        setFileType(type)
+                        setFile(null)
+                      }}
+                      className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
+                        fileType === type
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      {type === 'pdf' && 'PDF'}
+                      {type === 'docx' && 'Word'}
+                      {type === 'txt' && 'テキスト'}
+                    </button>
+                  ))}
+                </div>
 
-            {/* Input Mode Tabs */}
-            <div className="mb-8">
-              <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={getFileAccept()}
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                
                 <button
                   type="button"
-                  onClick={() => setInputMode('file')}
-                  className={`flex-1 py-3 px-6 rounded-lg font-medium transition-all ${
-                    inputMode === 'file'
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-800'
-                  }`}
+                  onClick={handleFileSelectClick}
+                  className="w-full py-4 px-6 bg-white border-2 border-dashed border-blue-400 rounded-xl text-blue-600 font-semibold hover:bg-blue-50 hover:border-blue-500 transition-all"
                 >
-                  ファイルから
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInputMode('text')}
-                  className={`flex-1 py-3 px-6 rounded-lg font-medium transition-all ${
-                    inputMode === 'text'
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-800'
-                  }`}
-                >
-                  テキスト入力
+                  {file ? `✓ ${file.name}` : 'ファイルを選択'}
                 </button>
               </div>
-            </div>
-
-            <form onSubmit={handleSubmit}>
-              {inputMode === 'file' && (
-                <div className="mb-8 p-6 bg-gray-50 border border-gray-200 rounded-xl">
-                  <label className="block text-sm font-semibold text-slate-700 mb-4">
-                    ファイル形式を選択する
-                  </label>
-                  <div className="flex gap-3 mb-6">
-                    {(['pdf', 'docx', 'txt'] as FileType[]).map((type) => (
-                      <button
-                        key={type}
-                        type="button"
-                        onClick={() => {
-                          setFileType(type)
-                          setFile(null)
-                        }}
-                        className={`px-5 py-2 rounded-lg font-medium text-sm transition-all ${
-                          fileType === type
-                            ? 'bg-blue-600 text-white shadow-md'
-                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        {type === 'pdf' && 'PDF'}
-                        {type === 'docx' && 'Word'}
-                        {type === 'txt' && 'テキスト'}
-                      </button>
-                    ))}
-                  </div>
-
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept={getFileAccept()}
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                  
-                  <button
-                    type="button"
-                    onClick={handleFileSelectClick}
-                    className="w-full py-4 px-6 bg-white border-2 border-dashed border-blue-400 rounded-xl text-blue-600 font-semibold hover:bg-blue-50 hover:border-blue-500 transition-all"
-                  >
-                    {file ? `✓ ${file.name}` : 'ファイルを選択'}
-                  </button>
-                  
-                  <p className="mt-4 text-sm text-slate-500">
-                    ※ PDFは1度に20ページまでにしてください。20ページを超える場合は、話数ごとにPDFを分割してアップロードしてください。
-                  </p>
-                </div>
-              )}
-
-              {inputMode === 'text' && (
-                <div className="mb-8">
-                  <label
-                    htmlFor="script-text"
-                    className="block text-sm font-semibold text-slate-700 mb-3"
-                  >
-                    台本テキスト
-                  </label>
-                  <textarea
-                    id="script-text"
-                    value={scriptText}
-                    onChange={(e) => setScriptText(e.target.value)}
-                    placeholder="ここに台本のテキストを貼り付けてください..."
-                    className="w-full h-64 p-4 border border-slate-300 rounded-xl resize-y
-                      focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                      text-sm"
-                  />
-                </div>
-              )}
 
               {error && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
@@ -581,29 +447,17 @@ export default function Home() {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-100">
-                    <th 
-                      onClick={() => handleSort('scene')}
-                      className="px-3 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none"
-                    >
-                      シーン {sortConfig?.key === 'scene' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+                    <th className="px-3 py-4 text-center text-sm font-bold text-slate-800 border w-16">
+                      シーン
                     </th>
-                    <th 
-                      onClick={() => handleSort('location')}
-                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none"
-                    >
-                      場所 {sortConfig?.key === 'location' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border">
+                      場所
                     </th>
-                    <th 
-                      onClick={() => handleSort('timeOfDay')}
-                      className="px-2 py-4 text-center text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none w-14"
-                    >
-                      D/N {sortConfig?.key === 'timeOfDay' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+                    <th className="px-2 py-4 text-center text-sm font-bold text-slate-800 border w-12">
+                      D/N
                     </th>
-                    <th 
-                      onClick={() => handleSort('content')}
-                      className="px-4 py-4 text-left text-sm font-bold text-slate-800 border cursor-pointer hover:bg-slate-200 select-none min-w-[200px]"
-                    >
-                      内容 {sortConfig?.key === 'content' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[300px]">
+                      内容
                     </th>
                     {matrixData.characters.map((char) => (
                       <th
@@ -618,7 +472,7 @@ export default function Home() {
                     <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[120px]">
                       小道具
                     </th>
-                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[120px]">
+                    <th className="px-4 py-4 text-left text-sm font-bold text-slate-800 border min-w-[100px]">
                       備考
                     </th>
                   </tr>
