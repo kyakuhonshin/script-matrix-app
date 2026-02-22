@@ -48,7 +48,7 @@ export default function Home() {
   const [fileType, setFileType] = useState<FileType>('pdf')
   const [file, setFile] = useState<File | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [progress, setProgress] = useState({ current: 0, total: 0 })
+  const [progress, setProgress] = useState({ current: 0, total: 0, filename: '' })
   const [error, setError] = useState<string>('')
   const [matrixData, setMatrixData] = useState<MatrixData | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -86,11 +86,11 @@ export default function Home() {
   }
 
   // 直列処理
-  const processTextSequentially = async (fullText: string): Promise<MatrixData> => {
+  const processTextSequentially = async (fullText: string, filename: string): Promise<MatrixData> => {
     const chunks = splitTextIntoChunks(fullText, CHUNK_SIZE)
     const totalChunks = chunks.length
     
-    setProgress({ current: 0, total: totalChunks })
+    setProgress({ current: 0, total: totalChunks, filename })
     
     const allScenes: any[] = []
     
@@ -119,7 +119,7 @@ export default function Home() {
           allScenes.push(...data.scenes)
         }
         
-        setProgress({ current: i + 1, total: totalChunks })
+        setProgress({ current: i + 1, total: totalChunks, filename })
         
       } catch (err: any) {
         console.error(`Chunk ${i + 1} failed:`, err)
@@ -179,7 +179,7 @@ export default function Home() {
       // TXTファイルの場合はチャンク処理
       if (fileType === 'txt') {
         const text = await file.text()
-        const result = await processTextSequentially(text)
+        const result = await processTextSequentially(text, file.name)
         setMatrixData(result)
         setIsProcessing(false)
         return
@@ -300,7 +300,7 @@ export default function Home() {
     setMatrixData(null)
     setError('')
     setIsProcessing(false)
-    setProgress({ current: 0, total: 0 })
+    setProgress({ current: 0, total: 0, filename: '' })
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -321,7 +321,7 @@ export default function Home() {
       <main className="max-w-5xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-slate-800 mb-4">
-            香盤表ジェネレーター v2.01
+            香盤表ジェネレーター v2.10
           </h1>
           <p className="text-slate-600 text-lg max-w-2xl mx-auto whitespace-pre-line">
             アップロードするファイル形式を選んで、ファイルを選択してアップロードしてください。
@@ -422,10 +422,15 @@ export default function Home() {
           <div className="text-center py-12 bg-white rounded-2xl shadow-lg mb-8">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mb-4"></div>
             <p className="text-slate-600 font-medium text-lg">
-              {progress.total > 0 ? `処理中... (${progress.current}/${progress.total})` : '処理中...'}
+              {progress.filename ? `${progress.filename} を読み込み中...` : '処理中...'}
             </p>
             {progress.total > 0 && (
-              <div className="mt-6 w-72 mx-auto bg-slate-200 rounded-full h-3">
+              <p className="text-slate-500 text-sm mt-2">
+                ({progress.current}/{progress.total})
+              </p>
+            )}
+            {progress.total > 0 && (
+              <div className="mt-4 w-72 mx-auto bg-slate-200 rounded-full h-3">
                 <div 
                   className="bg-blue-600 h-3 rounded-full transition-all duration-300"
                   style={{ width: `${(progress.current / progress.total) * 100}%` }}
